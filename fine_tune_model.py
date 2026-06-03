@@ -37,7 +37,10 @@ LEARNING_RATE   = 1e-4
 WEIGHT_DECAY    = 1e-5
 GRAD_CLIP       = 5.0
 
-# 蒸馏参数
+# 消融实验开关
+USE_DISTILL = False  # True=蒸馏微调, False=消融实验(无蒸馏)
+
+# 蒸馏参数 (仅 USE_DISTILL=True 时生效)
 DISTILL_WEIGHT = 0.4   # α: 蒸馏损失权重 (0.2-0.7)
 TEMPERATURE    = 3.0   # T: 温度 (2-4)
 
@@ -53,7 +56,9 @@ SIG_LEN = 2048
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {DEVICE}')
-print(f'蒸馏权重 α = {DISTILL_WEIGHT}, 温度 T = {TEMPERATURE}')
+print(f'蒸馏: {"启用" if USE_DISTILL else "关闭 (消融实验)"}')
+if USE_DISTILL:
+    print(f'  蒸馏权重 α = {DISTILL_WEIGHT}, 温度 T = {TEMPERATURE}')
 print(f'冻结模块: {FROZEN_MODULES}')
 
 # ============================================================
@@ -69,13 +74,15 @@ if not os.path.exists(best_path):
 model.load_state_dict(torch.load(best_path, map_location=DEVICE,
                                   weights_only=True))
 
-# 教师模型 = 冻结的基础模型
-teacher = ResNet1D(in_channels=3, num_outputs=2).to(DEVICE)
-teacher.load_state_dict(torch.load(best_path, map_location=DEVICE,
-                                    weights_only=True))
-teacher.eval()
-for p in teacher.parameters():
-    p.requires_grad = False
+# 教师模型 = 冻结的基础模型 (仅蒸馏模式)
+teacher = None
+if USE_DISTILL:
+    teacher = ResNet1D(in_channels=3, num_outputs=2).to(DEVICE)
+    teacher.load_state_dict(torch.load(best_path, map_location=DEVICE,
+                                        weights_only=True))
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad = False
 
 print(f'基础模型已加载: {best_path}')
 
@@ -161,7 +168,8 @@ print(f'混合批: 旧数据 {batch_pub} + 新数据 {batch_ft} = {BATCH_SIZE} /
 # ============================================================
 # 微调训练
 # ============================================================
-print('=== 开始微调训练 (蒸馏 + 混合批) ===')
+mode_str = '蒸馏 + 混合批' if USE_DISTILL else '消融实验 (无蒸馏, 仅混合批)'
+print(f'=== 开始微调训练: {mode_str} ===')
 
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
@@ -196,24 +204,22 @@ for epoch in range(1, NUM_EPOCHS + 1):
         y_self = Y_ft_t[self_idx].to(DEVICE)
 
         # === 前向传播 ===
-        # 自建数据: 仅任务损失
-        y_self_pred = model(x_self)
-        loss_self = criterion(y_self_pred, y_self)
+        # 新数据: 任务损失
+        y_ft_pred = model(x_self)
+        loss_ft = criterion(y_ft_pred, y_self)
 
-        # 公开数据: 任务损失 + 蒸馏损失
+        # 旧数据: 任务损失 (+ 蒸馏损失)
         y_pub_pred = model(x_pub)
         task_pub = criterion(y_pub_pred, y_pub)
 
-        # 教师预测 (软标签, 无梯度)
-        with torch.no_grad():
-            y_teacher = teacher(x_pub)
-
-        # 蒸馏损失: T^2 * MSE(pred/T, teacher/T)
-        distill_pub = criterion(y_pub_pred / TEMPERATURE,
-                                 y_teacher / TEMPERATURE) * (TEMPERATURE ** 2)
-
-        # 综合损失
-        loss = loss_self + (1 - DISTILL_WEIGHT) * task_pub + DISTILL_WEIGHT * distill_pub
+        if USE_DISTILL:
+            with torch.no_grad():
+                y_teacher = teacher(x_pub)
+            distill_pub = criterion(y_pub_pred / TEMPERATURE,
+                                     y_teacher / TEMPERATURE) * (TEMPERATURE ** 2)
+            loss = loss_ft + (1 - DISTILL_WEIGHT) * task_pub + DISTILL_WEIGHT * distill_pub
+        else:
+            loss = loss_ft + task_pub
 
         # 反向传播
         optimizer.zero_grad()
