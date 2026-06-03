@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# MATLAB
+*.asv
+*.m~
+~$*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Generated outputs
+result/
+cnn_output/
+output/
+models/*.pth
+
+# Claude local config
+.claude/
+
+# System
+.DS_Store
+Thumbs.db
+desktop.ini
