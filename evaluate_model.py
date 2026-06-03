@@ -17,7 +17,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from model import (
-    ResNet1D, load_public_dataset, load_self_dataset,
+    ResNet1D, load_public_dataset,
     preprocess_ppg, apply_normalize_3ch
 )
 
@@ -27,7 +27,6 @@ from model import (
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DATA_PATH = os.path.join(SCRIPT_DIR, '数据集', '1、公开数据集')
-SELF_DATA_PATH   = os.path.join(SCRIPT_DIR, 'dataset')
 MODEL_SAVE_PATH  = os.path.join(SCRIPT_DIR, 'models')
 OUTPUT_PATH      = os.path.join(SCRIPT_DIR, 'cnn_output')
 os.makedirs(OUTPUT_PATH, exist_ok=True)
@@ -196,19 +195,11 @@ X_pub_raw  = data_pub['test']['ppg']
 Y_pub_sbp  = data_pub['test']['sbp']
 Y_pub_dbp  = data_pub['test']['dbp']
 
-data_self = load_self_dataset(SELF_DATA_PATH, sig_len=SIG_LEN)
-X_self_raw  = data_self['test']['ppg']
-Y_self_sbp  = data_self['test']['sbp']
-Y_self_dbp  = data_self['test']['dbp']
-
 # 预处理
 X_pub_3ch  = preprocess_ppg(X_pub_raw, FS)
 X_pub_3ch  = apply_normalize_3ch(X_pub_3ch, norm_stats)
 
-X_self_3ch = preprocess_ppg(X_self_raw, FS)
-X_self_3ch = apply_normalize_3ch(X_self_3ch, norm_stats)
-
-print(f'公开测试集: {len(X_pub_3ch)}, 自建测试集: {len(X_self_3ch)}')
+print(f'测试集样本数: {len(X_pub_3ch)}')
 
 # ============================================================
 # 评估
@@ -219,59 +210,35 @@ all_results = {}
 for model_name, model in models.items():
     print(f'\n========== 评估: {model_name} 模型 ==========')
 
-    # --- 公开测试集 ---
-    print('--- 公开测试集 ---')
-    y_pred_pub = predict(model, X_pub_3ch)
-    y_pred_pub = y_pred_pub * bp_std + bp_mean
-    y_true_pub = np.column_stack([Y_pub_sbp, Y_pub_dbp])
+    y_pred = predict(model, X_pub_3ch)
+    y_pred = y_pred * bp_std + bp_mean
+    y_true = np.column_stack([Y_pub_sbp, Y_pub_dbp])
 
-    pub_res, _, _ = compute_metrics(y_true_pub, y_pred_pub, '公开测试集')
-
-    # --- 自建测试集 ---
-    print('--- 自建测试集 ---')
-    y_pred_self = predict(model, X_self_3ch)
-    y_pred_self = y_pred_self * bp_std + bp_mean
-    y_true_self = np.column_stack([Y_self_sbp, Y_self_dbp])
-
-    self_res, _, _ = compute_metrics(y_true_self, y_pred_self, '自建测试集')
+    pub_res, _, _ = compute_metrics(y_true, y_pred, '测试集')
 
     all_results[model_name] = {
-        'public': {'res': pub_res, 'y_true': y_true_pub, 'y_pred': y_pred_pub},
-        'self':   {'res': self_res, 'y_true': y_true_self, 'y_pred': y_pred_self},
+        'res': pub_res, 'y_true': y_true, 'y_pred': y_pred,
     }
 
-    # --- 画图 ---
-    datasets = [
-        (y_true_pub, y_pred_pub, 'public'),
-        (y_true_self, y_pred_self, 'self'),
-    ]
-    for yt, yp, ds_name in datasets:
-        plot_evaluation(yt, yp, f'{model_name}_{ds_name}', OUTPUT_PATH)
+    plot_evaluation(y_true, y_pred, f'{model_name}_test', OUTPUT_PATH)
 
-    # 保存预测值
-    save_dict = {
-        'y_true_pub': y_true_pub, 'y_pred_pub': y_pred_pub,
-        'y_true_self': y_true_self, 'y_pred_self': y_pred_self,
-        'pub_res': pub_res, 'self_res': self_res,
-    }
-    np.savez(os.path.join(OUTPUT_PATH, f'predictions_{model_name}.npz'), **save_dict)
+    np.savez(os.path.join(OUTPUT_PATH, f'predictions_{model_name}.npz'),
+             y_true=y_true, y_pred=y_pred, res=pub_res)
 
 # ============================================================
 # 对比汇总 (仅在有两个模型时)
 # ============================================================
 if len(models) == 2:
     print('\n========== 模型对比 ==========')
-    print(f'{"数据集":<12} {"模型":<12} {"SBP_MAE":<10} {"SBP_STD":<10} {"DBP_MAE":<10} {"DBP_STD":<10}')
-    print('-' * 64)
+    print(f'{"模型":<12} {"SBP_MAE":<10} {"SBP_STD":<10} {"DBP_MAE":<10} {"DBP_STD":<10}')
+    print('-' * 52)
 
     model_names = list(models.keys())
-    ds_labels = [('public', '公开测试集'), ('self', '自建测试集')]
 
-    for ds_key, ds_label in ds_labels:
-        for mn in model_names:
-            r = all_results[mn][ds_key]['res']
-            print(f'{ds_label:<12} {mn:<12} {r["SBP_MAE"]:<10.2f} {r["SBP_STD"]:<10.2f} '
-                  f'{r["DBP_MAE"]:<10.2f} {r["DBP_STD"]:<10.2f}')
+    for mn in model_names:
+        r = all_results[mn]['res']
+        print(f'{mn:<12} {r["SBP_MAE"]:<10.2f} {r["SBP_STD"]:<10.2f} '
+              f'{r["DBP_MAE"]:<10.2f} {r["DBP_STD"]:<10.2f}')
 
     # 对比柱状图
     metrics_keys = ['SBP_MAE', 'SBP_STD', 'DBP_MAE', 'DBP_STD']
@@ -282,14 +249,11 @@ if len(models) == 2:
 
     for k, (mk, ml) in enumerate(zip(metrics_keys, metric_labels)):
         ax = axes[k // 2][k % 2]
-        x = np.arange(2)
         width = 0.35
         for mi, mn in enumerate(model_names):
-            vals = [all_results[mn]['public']['res'][mk],
-                    all_results[mn]['self']['res'][mk]]
-            ax.bar(x + mi * width, vals, width, label=mn, color=colors[mi])
-        ax.set_xticks(x + width / 2)
-        ax.set_xticklabels(['Public', 'Self-built'])
+            r = all_results[mn]['res']
+            ax.bar(mi * width, r[mk], width, label=mn, color=colors[mi])
+        ax.set_xticks([])
         ax.set_ylabel('mmHg')
         ax.set_title(ml)
         ax.legend()

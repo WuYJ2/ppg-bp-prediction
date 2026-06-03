@@ -15,11 +15,9 @@ __pycache__/
 *.swp
 *.swo
 
-# Generated outputs
+# Generated outputs (MATLAB)
 result/
-cnn_output/
 output/
-models/*.pth
 
 # Claude local config
 .claude/

@@ -60,6 +60,28 @@ data = load_public_dataset(PUBLIC_DATA_PATH)
 X_train_raw = data['train']['ppg']
 Y_train_sbp = data['train']['sbp']
 Y_train_dbp = data['train']['dbp']
+
+# --- 应用 70/30 拆分 (只取基础训练部分) ---
+split_file = os.path.join(MODEL_SAVE_PATH, 'train_split.npz')
+if os.path.exists(split_file):
+    split = np.load(split_file)
+    base_idx = split['base_idx']
+    print(f'加载拆分索引: base={len(base_idx)} 样本')
+else:
+    # 首次运行: 自动生成拆分
+    rng = np.random.RandomState(42)
+    n_total = len(Y_train_sbp)
+    idx = rng.permutation(n_total)
+    n_base = int(n_total * 0.7)
+    base_idx = np.sort(idx[:n_base])
+    ft_idx = np.sort(idx[n_base:])
+    np.savez(split_file, base_idx=base_idx, ft_idx=ft_idx, seed=42, ratio=0.7)
+    print(f'自动生成拆分: base={len(base_idx)}, ft={len(ft_idx)}')
+
+X_train_raw = X_train_raw[base_idx]
+Y_train_sbp = Y_train_sbp[base_idx]
+Y_train_dbp = Y_train_dbp[base_idx]
+print(f'基础训练样本数: {len(X_train_raw)}')
 X_val_raw   = data['val']['ppg']
 Y_val_sbp   = data['val']['sbp']
 Y_val_dbp   = data['val']['dbp']

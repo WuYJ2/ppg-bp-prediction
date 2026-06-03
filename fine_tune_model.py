@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import time
 
 from model import (
-    ResNet1D, load_public_dataset, load_self_dataset,
+    ResNet1D, load_public_dataset,
     preprocess_ppg, normalize_3ch, apply_normalize_3ch, normalize_bp
 )
 
@@ -25,14 +25,13 @@ from model import (
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DATA_PATH = os.path.join(SCRIPT_DIR, '数据集', '1、公开数据集')
-SELF_DATA_PATH   = os.path.join(SCRIPT_DIR, 'dataset')
 MODEL_SAVE_PATH  = os.path.join(SCRIPT_DIR, 'models')
 OUTPUT_PATH      = os.path.join(SCRIPT_DIR, 'cnn_output')
 os.makedirs(MODEL_SAVE_PATH, exist_ok=True)
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 
 # 微调超参数
-NUM_EPOCHS      = 50
+NUM_EPOCHS      = 80
 BATCH_SIZE      = 32
 LEARNING_RATE   = 1e-4
 WEIGHT_DECAY    = 1e-5
@@ -43,7 +42,7 @@ DISTILL_WEIGHT = 0.4   # α: 蒸馏损失权重 (0.2-0.7)
 TEMPERATURE    = 3.0   # T: 温度 (2-4)
 
 # 新旧数据混合比
-SELF_DATA_RATIO = 0.5  # 每批中自建数据占比
+FT_DATA_RATIO = 0.5  # 每批中微调数据占比
 
 # 冻结层名称 (对应 ResNet1D 的子模块)
 FROZEN_MODULES = ['conv1', 'bn1', 'layer1', 'layer2']
@@ -90,36 +89,40 @@ bp_std  = norm_data['bp_std']
 norm_stats = {'ch_mean': ch_mean, 'ch_std': ch_std}
 
 # ============================================================
-# 加载公开数据 (混合批用)
+# 加载公开训练集 + 应用 70/30 拆分
 # ============================================================
-print('=== 加载公开数据集 (混合训练用) ===')
+print('=== 加载公开数据集并拆分 ===')
 data_pub = load_public_dataset(PUBLIC_DATA_PATH)
 
-X_pub_raw  = data_pub['train']['ppg']
-Y_pub_sbp  = data_pub['train']['sbp']
-Y_pub_dbp  = data_pub['train']['dbp']
+X_all_raw  = data_pub['train']['ppg']
+Y_all_sbp  = data_pub['train']['sbp']
+Y_all_dbp  = data_pub['train']['dbp']
+
+# 加载拆分索引
+split = np.load(os.path.join(MODEL_SAVE_PATH, 'train_split.npz'))
+base_idx = split['base_idx']
+ft_idx   = split['ft_idx']
+
+# 基础训练部分 → "旧数据" (混合批用)
+X_pub_raw = X_all_raw[base_idx]
+Y_pub_sbp = Y_all_sbp[base_idx]
+Y_pub_dbp = Y_all_dbp[base_idx]
+
+# 微调部分 → "新数据" (自建替换)
+X_ft_raw  = X_all_raw[ft_idx]
+Y_ft_sbp  = Y_all_sbp[ft_idx]
+Y_ft_dbp  = Y_all_dbp[ft_idx]
+
+print(f'旧数据 (基础训练部分): {len(X_pub_raw)} 样本')
+print(f'新数据 (微调部分):     {len(X_ft_raw)} 样本')
 
 X_pub_3ch  = preprocess_ppg(X_pub_raw, FS)
 X_pub_3ch  = apply_normalize_3ch(X_pub_3ch, norm_stats)
 Y_pub_norm = (np.column_stack([Y_pub_sbp, Y_pub_dbp]) - bp_mean) / bp_std
 
-print(f'公开训练数据: {len(X_pub_3ch)} 样本')
-
-# ============================================================
-# 加载自建数据 (cell 格式)
-# ============================================================
-print('=== 加载自建数据集 ===')
-data_self = load_self_dataset(SELF_DATA_PATH, sig_len=SIG_LEN)
-
-X_self_raw  = data_self['train']['ppg']
-Y_self_sbp  = data_self['train']['sbp']
-Y_self_dbp  = data_self['train']['dbp']
-
-X_self_3ch  = preprocess_ppg(X_self_raw, FS)
-X_self_3ch  = apply_normalize_3ch(X_self_3ch, norm_stats)
-Y_self_norm = (np.column_stack([Y_self_sbp, Y_self_dbp]) - bp_mean) / bp_std
-
-print(f'自建训练数据: {len(X_self_3ch)} 样本')
+X_ft_3ch   = preprocess_ppg(X_ft_raw, FS)
+X_ft_3ch   = apply_normalize_3ch(X_ft_3ch, norm_stats)
+Y_ft_norm  = (np.column_stack([Y_ft_sbp, Y_ft_dbp]) - bp_mean) / bp_std
 
 # ============================================================
 # 冻结浅层
@@ -142,18 +145,18 @@ print(f'可训练参数: {trainable:,} / {total:,} (冻结: {frozen:,})')
 # 转为 tensor
 X_pub_t  = torch.from_numpy(X_pub_3ch)
 Y_pub_t  = torch.from_numpy(Y_pub_norm)
-X_self_t = torch.from_numpy(X_self_3ch)
-Y_self_t = torch.from_numpy(Y_self_norm)
+X_ft_t = torch.from_numpy(X_ft_3ch)
+Y_ft_t = torch.from_numpy(Y_ft_norm)
 
 num_pub  = len(X_pub_t)
-num_self = len(X_self_t)
+num_ft = len(X_ft_t)
 
-batch_pub  = int(BATCH_SIZE * (1 - SELF_DATA_RATIO))
-batch_self = BATCH_SIZE - batch_pub
+batch_pub  = int(BATCH_SIZE * (1 - FT_DATA_RATIO))
+batch_ft = BATCH_SIZE - batch_pub
 
-num_batches = max(num_pub // batch_pub, num_self // batch_self) + 1
+num_batches = max(num_pub // batch_pub, num_ft // batch_ft) + 1
 
-print(f'混合批: 公开 {batch_pub} + 自建 {batch_self} = {BATCH_SIZE} / 批')
+print(f'混合批: 旧数据 {batch_pub} + 新数据 {batch_ft} = {BATCH_SIZE} / 批')
 
 # ============================================================
 # 微调训练
@@ -174,7 +177,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
     # 打乱索引
     idx_pub  = torch.randperm(num_pub)
-    idx_self = torch.randperm(num_self)
+    idx_ft = torch.randperm(num_ft)
 
     for b in range(num_batches):
         # 采样公开数据
@@ -183,14 +186,14 @@ for epoch in range(1, NUM_EPOCHS + 1):
         pub_idx   = idx_pub[pub_start:pub_end]
 
         # 采样自建数据
-        self_start = (b * batch_self) % max(1, num_self - batch_self + 1)
-        self_end   = min(self_start + batch_self, num_self)
-        self_idx   = idx_self[self_start:self_end]
+        self_start = (b * batch_ft) % max(1, num_ft - batch_ft + 1)
+        self_end   = min(self_start + batch_ft, num_ft)
+        self_idx   = idx_ft[self_start:self_end]
 
         x_pub  = X_pub_t[pub_idx].to(DEVICE)
         y_pub  = Y_pub_t[pub_idx].to(DEVICE)
-        x_self = X_self_t[self_idx].to(DEVICE)
-        y_self = Y_self_t[self_idx].to(DEVICE)
+        x_self = X_ft_t[self_idx].to(DEVICE)
+        y_self = Y_ft_t[self_idx].to(DEVICE)
 
         # === 前向传播 ===
         # 自建数据: 仅任务损失
