@@ -1,23 +1,23 @@
 # PPG 无创血压预测项目
 
-基于光电容积脉搏波 (PPG) 信号预测收缩压 (SBP) 和舒张压 (DBP)，包含两套方案：
-
+基于光电容积脉搏波 (PPG) 信号预测收缩压 (SBP) 和舒张压 (DBP)，包含三套方案：
 - **传统方案**: 手工特征提取 + SVR 回归 (MATLAB)
 - **深度学习方案**: 1D-ResNet 端到端预测 (PyTorch)
+- **GPR 方案**: 手工特征 + 高斯过程回归 (MATLAB)
 
 ## 项目结构
 
 ```
 .
-├── model.py                   # [共享] 1D-ResNet 模型定义 + 数据加载 + 预处理
+├── model.py                   # [DL] 1D-ResNet 模型定义 + 数据加载 + 预处理
 ├── train_base_model.py        # [DL] 基础模型训练 (70% 公开数据)
 ├── fine_tune_model.py         # [DL] 微调 (冻结浅层 + 新旧混合 + 可选蒸馏)
 ├── evaluate_model.py          # [DL] 评估 (预测值 / MAE / STD / 图表)
 ├── split_data.py              # [工具] 公开数据 7:3 拆分
 │
-├── train_base_model.m         # [DL-MATLAB] 基础模型训练 (已废弃, 仅供参考)
-├── fine_tune_model.m          # [DL-MATLAB] 蒸馏微调 (已废弃, 仅供参考)
-├── evaluate_model.m           # [DL-MATLAB] 评估 (已废弃, 仅供参考)
+├── train_gpr.m                # [GPR] 公开特征 → GPR 基础模型训练
+├── finetune_gpr.m             # [GPR] 公开+自建混合 → GPR 微调
+├── evaluate_gpr.m             # [GPR] 双数据集评估 (base vs finetuned)
 │
 ├── find_all_parameter.m       # [主程序] 批量特征提取脚本
 ├── find_parameter_amend.m     # [核心函数] 单条 PPG 信号的 78 维特征计算
@@ -25,12 +25,12 @@
 ├── train_DBP.m / train_SBP.m  # SVR 血压预测模型训练
 ├── find_result.m              # SVR 训练结果汇总分析
 │
-├── fselect_x.m                # 预处理: 去除波形异常段 (尖峰检测)
+├── fselect_x.m                # 预处理: 去除波形异常段
 ├── fdenoise_x.m               # 预处理: 基线漂移 + 高频噪声去除
 ├── fmoveaverage_x.m           # 预处理: 移动平均滤波
 ├── fabnormal_x.m              # 预处理: 异常样本剔除
 │
-├── SVMcgForRegress.m          # SVM 参数网格搜索 (交叉验证)
+├── SVMcgForRegress.m          # SVM 参数网格搜索
 ├── bin.m / GetPath.py         # 工具: 格式转换 / 批量创建目录
 │
 ├── emd.m / eemd.m             # 经验模态分解 / 集合经验模态分解
@@ -41,20 +41,81 @@
 ├── base.mat / lowpass.mat     # 去噪滤波器系数
 ├── parameter.mat              # 特征参考数据
 │
-├── dataset/                   # 自建数据集 (MATLAB cell 格式)
+├── dataset/                   # 自建数据集 (PPG cell + BP 标签)
 │   ├── PPG/
 │   ├── BP/
 │   └── Parameter/
 │
 ├── 数据集/
-│   ├── 1、公开数据集/         # 基础模型训练 + 验证 + 测试
-│   └── 2、自建数据集/         # 特征 + 标签 (无原始 PPG, 未使用)
+│   ├── 1、公开数据集/         # 公开 PPG + 预提取特征 + BP 标签
+│   └── 2、自建数据集/         # 预提取特征 + BP 标签 (无 PPG)
 │
-├── models/                    # 模型文件 (.pth) + 归一化参数 + 拆分索引
-├── cnn_output/                # 评估图表 + 预测值 → 见下方图表注释
+├── models/                    # 1D-ResNet 模型 (.pth) + 归一化参数 + 拆分索引
+├── cnn_output/                # 1D-ResNet 评估图表 + 预测值
+├── gpr_models/                # GPR 模型 (.mat)
+├── gpr_output/                # GPR 评估图表 + 预测值
 ├── result/                    # SVR 模型训练结果 (MATLAB)
 └── output/                    # 特征提取结果 (MATLAB)
 ```
+
+## GPR 高斯过程回归方案 (MATLAB)
+
+### 数据流
+
+```
+数据集/1、公开数据集/
+├── TrainParameter (4745, 78) → GPR 基础训练 (train_gpr.m)
+├── TestParameter  (1582, 78) → 公开测试评估
+数据集/2、自建数据集/
+├── TrainParameter (774, 78)  ─┐
+└── TestParameter  (273, 78)   │ 微调评估
+                                │
+公开 TrainParameter ────────────┼→ 混合 → GPR 微调 (finetune_gpr.m)
+```
+
+### 1. 基础模型训练 (`train_gpr.m`)
+
+直接使用公开数据集的预提取 78 维特征训练 GPR:
+
+1. 加载 `TrainParameter.mat` (4745×78)
+2. z-score 归一化
+3. 训练 GPR: `fitrgp` + Matérn 5/2 核 + exact 拟合
+4. 自评估 MAE/STD
+5. 输出: `gpr_models/gpr_base.mat`
+
+### 2. 微调 (`finetune_gpr.m`)
+
+混合公开和自建特征重新训练 GPR:
+
+- 公开旧数据: TrainParameter (4745×78) → 提取特征
+- 自建新数据: TrainParameter (774×78) → 直接加载
+- 合并标准化 → `fitrgp` (Matérn 5/2, sd 子集近似)
+- 输出: `gpr_models/gpr_finetuned.mat`
+
+### 3. 评估 (`evaluate_gpr.m`)
+
+在公开 + 自建两个测试集上分别评估 base 和 finetuned 模型:
+
+- 输出 MAE / STD
+- 生成图表: Bland-Altman / 相关性散点图 / 预测折线图 (含 GPR 95% CI)
+- 对比柱状图 (双数据集, base vs finetuned)
+
+## gpr_output/ 图表注释
+
+图表命名: `{类型}_{模型}_{数据集}.png`
+
+| 类型 | 说明 |
+|------|------|
+| `BA_*.png` | Bland-Altman: x=均值, y=差值, 红线=偏差±1.96SD |
+| `Corr_*.png` | 相关性散点图: 含 y=x 对角 + 拟合线 + Pearson r |
+| `Line_*.png` | 预测折线图: 前 80 样本, 含 GPR 95% 置信区间 |
+| `model_comparison.png` | 双数据集 bar chart: base vs finetuned 的 4 指标 |
+
+| 模型 | 数据集 |
+|------|--------|
+| `base` / `finetuned` | `pub` (公开测试集) / `self` (自建测试集) |
+
+---
 
 ## 深度学习方案 (PyTorch)
 
@@ -70,198 +131,116 @@
 
 ### 1. 基础模型训练 (`train_base_model.py`)
 
-1. 加载公开训练集, 按 7:3 拆分 (首次运行自动生成 `models/train_split.npz`)
-2. 预处理: 计算一阶/二阶导数 → 3 通道输入 (PPG + dPPG + d²PPG)
-3. z-score 归一化 (保存统计量至 `models/norm_params.npz`)
+1. 加载公开训练集, 按 7:3 拆分
+2. 预处理: 一阶/二阶导数 → 3 通道 (PPG + dPPG + d²PPG)
+3. z-score 归一化
 4. 1D-ResNet 架构:
 
 ```
 Input (3, 2048)
-  → Conv1 (7×1, 64, stride 2) → BN → ReLU → MaxPool (3, stride 2)  → (64, 512)
-  → ResBlock1 [3×1, 64] ×2                               → (64, 512)
-  → ResBlock2 [3×1, 128] ×2, stride 2, 1×1 projection    → (128, 256)
-  → ResBlock3 [3×1, 256] ×2, stride 2, 1×1 projection    → (256, 128)
-  → GlobalAvgPool                                         → (256,)
-  → FC (2)                                                → (SBP, DBP)
+  → Conv1 (7×1, 64, stride 2) → BN → ReLU → MaxPool (3, stride 2)
+  → ResBlock1 [3×1, 64] ×2
+  → ResBlock2 [3×1, 128] ×2, stride 2, 1×1 proj
+  → ResBlock3 [3×1, 256] ×2, stride 2, 1×1 proj
+  → GlobalAvgPool → FC (2) → SBP, DBP
 ```
 
-5. 训练: Adam (lr=1e-3, step decay 0.5/25epoch), MSE loss, 梯度裁剪
+5. 训练: Adam (lr=1e-3, step decay), MSE, 梯度裁剪
 6. 输出: `models/base_model_best.pth`
 
 ### 2. 微调 (`fine_tune_model.py`)
 
-| 配置项              | 说明                                            |
-| ---------------- | --------------------------------------------- |
-| `USE_DISTILL`    | **消融实验开关**: `True`=蒸馏微调, `False`=无蒸馏 (仅冻结+混合) |
-| `DISTILL_WEIGHT` | α: 蒸馏损失权重 (0.2-0.7, 默认 0.4)                   |
-| `TEMPERATURE`    | T: 温度 (2-4, 默认 3.0)                           |
-| `FT_DATA_RATIO`  | 每批中新数据占比 (默认 0.5)                             |
-| `FROZEN_MODULES` | 冻结 `conv1 + bn1 + layer1 + layer2`            |
-
-**损失函数**:
-
-- 蒸馏模式: `L = L_task(new) + (1-α)×L_task(old) + α×T²×MSE(pred/T, teacher/T)`
-- 消融模式: `L = L_task(new) + L_task(old)`
+| 配置项 | 说明 |
+|--------|------|
+| `USE_DISTILL` | 消融开关: True=蒸馏, False=仅冻结+混合 |
+| `FROZEN_MODULES` | 冻结 conv1+bn1+layer1+layer2 |
+| `FT_DATA_RATIO` | 每批中新数据占比 (0.5) |
 
 ### 3. 评估 (`evaluate_model.py`)
 
-- 加载基础模型和/或微调模型 (`EVAL_MODE = 'base' | 'finetuned' | 'both'`)
-- 在公开测试集上预测 SBP/DBP
-- 计算 MAE / STD
-- 生成图表 (见下方注释)
+在公开测试集上评估 base / finetuned 模型, 生成 BA + Corr + Line 图表。
 
 ## cnn_output/ 图表注释
 
-所有图表命名规则: `{类型}_{模型}_{数据集}.png`
-
-### 训练曲线
-
-| 文件                        | 说明                                              |
-| ------------------------- | ----------------------------------------------- |
-| `base_training_curve.png` | 基础模型训练曲线: 蓝色=训练 Loss, 红色=验证 Loss (对数坐标), x=迭代次数 |
-| `finetune_curve.png`      | 微调训练曲线: 蓝色=每个 epoch 的平均 Loss                    |
-
-### Bland-Altman 一致性分析 (`BA_*.png`)
-
-每张图左右并排展示 SBP 和 DBP 的 Bland-Altman 图:
-
-- **x 轴**: 真实值与预测值的均值 (mmHg)
-- **y 轴**: 差值 Predicted - True (mmHg)
-- 蓝色散点: 每个测试样本
-- 红色实线: 平均偏差 (mean difference)
-- 红色虚线: 95% 一致性界限 (mean ± 1.96×SD)
-
-| 文件                        | 模型   | 测试集         |
-| ------------------------- | ---- | ----------- |
-| `BA_base_test.png`        | 基础模型 | 公开测试集       |
-| `BA_finetuned_test.png`   | 微调模型 | 公开测试集       |
-| `BA_base_public.png`      | 基础模型 | 公开测试集 (旧版)  |
-| `BA_finetuned_public.png` | 微调模型 | 公开测试集 (旧版)  |
-| `BA_base_self.png`        | 基础模型 | 自建测试集 (已废弃) |
-| `BA_finetuned_self.png`   | 微调模型 | 自建测试集 (已废弃) |
-
-### 相关性散点图 (`Corr_*.png`)
-
-每张图左右并排展示 SBP 和 DBP 的相关性:
-
-- **x 轴**: 真实值 (mmHg)
-- **y 轴**: 预测值 (mmHg)
-- 黑色虚线: y=x 理想对角线
-- 红色实线: 最小二乘拟合线
-- 右下角: Pearson 相关系数 r
-
-| 文件                          | 模型   | 测试集         |
-| --------------------------- | ---- | ----------- |
-| `Corr_base_test.png`        | 基础模型 | 公开测试集       |
-| `Corr_finetuned_test.png`   | 微调模型 | 公开测试集       |
-| `Corr_base_public.png`      | 基础模型 | 公开测试集 (旧版)  |
-| `Corr_finetuned_public.png` | 微调模型 | 公开测试集 (旧版)  |
-| `Corr_base_self.png`        | 基础模型 | 自建测试集 (已废弃) |
-| `Corr_finetuned_self.png`   | 微调模型 | 自建测试集 (已废弃) |
-
-### 预测值折线图 (`Line_*.png`)
-
-每张图左右并排展示 SBP 和 DBP 前 80 个样本:
-
-- **蓝色实线**: 真实值
-- **红色实线**: 预测值
-- x 轴: 样本序号
-
-| 文件                          | 模型   | 测试集         |
-| --------------------------- | ---- | ----------- |
-| `Line_base_test.png`        | 基础模型 | 公开测试集       |
-| `Line_finetuned_test.png`   | 微调模型 | 公开测试集       |
-| `Line_base_public.png`      | 基础模型 | 公开测试集 (旧版)  |
-| `Line_finetuned_public.png` | 微调模型 | 公开测试集 (旧版)  |
-| `Line_base_self.png`        | 基础模型 | 自建测试集 (已废弃) |
-| `Line_finetuned_self.png`   | 微调模型 | 自建测试集 (已废弃) |
-
-### 模型对比
-
-| 文件                     | 说明                                                         |
-| ---------------------- | ---------------------------------------------------------- |
-| `model_comparison.png` | 基础模型 vs 微调模型: 4 个子图分别对比 SBP_MAE, SBP_STD, DBP_MAE, DBP_STD |
-
-### 预测值数据
-
-| 文件                          | 内容                                |
-| --------------------------- | --------------------------------- |
-| `predictions_base.npz`      | 基础模型预测: `y_true`, `y_pred`, `res` |
-| `predictions_finetuned.npz` | 微调模型预测: `y_true`, `y_pred`, `res` |
+| 文件 | 说明 |
+|------|------|
+| `base_training_curve.png` | 基础模型训练 Loss 曲线 |
+| `finetune_curve.png` | 微调 Loss 曲线 |
+| `BA_{model}_test.png` | Bland-Altman 一致性分析 |
+| `Corr_{model}_test.png` | 相关性散点图 |
+| `Line_{model}_test.png` | 预测值折线图 |
+| `model_comparison.png` | Base vs Fine-tuned 对比柱状图 |
+| `predictions_{model}.npz` | 预测值数据 |
 
 ---
 
 ## 传统方案 (MATLAB SVR)
 
 ### 特征提取
-
-**`find_all_parameter.m`** 读取 `dataset/PPG/`, 调用 `find_parameter_amend()` 计算 78 维特征, 输出至 `output/`。
+`find_all_parameter.m` 读取 PPG, 调用 `find_parameter_amend()` 计算 78 维特征。
 
 **78 维特征分类:**
 
-| 类别   | 特征编号                            | 数量  | 说明                       |
-| ---- | ------------------------------- | --- | ------------------------ |
-| 时间域  | 1-8, 12-13, 23-24, 36-42, 45-46 | 22  | 收缩/舒张时间、脉宽、周期、波峰幅值等      |
-| 面积   | 9-11, 43-44                     | 5   | 升支/降支面积及其比值              |
-| 一阶微分 | 14-22                           | 9   | 变化速率相关特征                 |
-| 频域   | 25-35, 64-78                    | 26  | 基频/谐波、频带能量及能量比           |
-| 小波变换 | 47-63                           | 17  | 细节系数能量、IMF 能量矩、HHT 边际谱能量 |
+| 类别 | 特征编号 | 数量 | 说明 |
+|------|---------|------|------|
+| 时间域 | 1-8, 12-13, 23-24, 36-42, 45-46 | 22 | 收缩/舒张时间、脉宽、周期、波峰幅值 |
+| 面积 | 9-11, 43-44 | 5 | 升支/降支面积及其比值 |
+| 一阶微分 | 14-22 | 9 | 变化速率相关特征 |
+| 频域 | 25-35, 64-78 | 26 | 基频/谐波、频带能量及能量比 |
+| 小波变换 | 47-63 | 17 | 细节系数能量、IMF 能量矩、HHT 边际谱 |
 
-### SVR 模型训练
-
-**`train_SBP.m`** / **`train_DBP.m`**: 特征选择 → 归一化 → ε-SVR (径向基核) → MAE/STD → Bland-Altman + 相关性图, 结果保存至 `result/`。
-
-### 预处理 (可选)
-
-| 函数                     | 功能              |
-| ---------------------- | --------------- |
-| `fselect_x(signal)`    | 检测并去除尖峰异常段      |
-| `fdenoise_x(signal)`   | 低通滤波 + 基线漂移去除   |
-| `fmoveaverage_x(wine)` | Hamming 窗移动平均平滑 |
-| `fabnormal_x(wine)`    | 基于特征均值阈值剔除异常样本  |
+### SVR 训练
+`train_SBP.m` / `train_DBP.m`: 特征选择 → 归一化 → ε-SVR → MAE/STD → Bland-Altman + 相关性图。
 
 ---
 
 ## 分支管理
 
-| 分支       | 说明                              |
-| -------- | ------------------------------- |
-| `v1.0`   | 初始版本: MATLAB SVR + CNN, 自建数据微调  |
-| `v1.1`   | 数据策略改为公开数据集 7:3 内部分割            |
-| `v1.2`   | 消融实验: 新增 `USE_DISTILL` 开关, 关闭蒸馏 |
-| `master` | 开发主线 (当前 = v1.2)                |
+| 分支 | 说明 |
+|------|------|
+| `v1.0` | 初始版本: MATLAB SVR + DL, 自建数据微调 |
+| `v1.1` | 数据策略改为公开数据集 7:3 内部分割 |
+| `v1.2` | 消融实验: 新增 `USE_DISTILL` 开关 |
+| `v2.0` | GPR 方案: 公开特征 + 自建特征, 双数据集评估 |
+| `master` | 开发主线 (当前 = v2.0) |
 
 ---
 
 ## 依赖项
 
-### 深度学习方案
+### GPR 方案 (MATLAB)
+- **MATLAB** R2019b+
+- **Statistics and Machine Learning Toolbox** — `fitrgp`, `predict`
 
-- **Python 3.9+**
-- **PyTorch** 2.x (CUDA 推荐)
-- **numpy, scipy, h5py** — 数据加载
-- **matplotlib** — 图表绘制
+### 深度学习方案
+- **Python 3.9+**, **PyTorch** 2.x (CUDA 推荐)
+- **numpy, scipy, h5py, matplotlib**
 
 ### 传统方案 (MATLAB)
-
 - **MATLAB** R2019b+
-- **LIBSVM** / **Wavelet Toolbox** / **Signal Processing Toolbox** / **Statistics and ML Toolbox**
+- **LIBSVM** / **Wavelet Toolbox** / **Signal Processing Toolbox**
 
 ---
 
 ## 使用方法
 
-### 深度学习方案
+### GPR 方案（推荐）
+```matlab
+train_gpr         % 1. 基础模型 (公开特征)
+finetune_gpr      % 2. 微调 (公开+自建混合)
+evaluate_gpr      % 3. 评估 (双数据集对比)
+```
 
+### 深度学习方案
 ```bash
-python split_data.py            # 1. 生成数据拆分 (可选, 训练时自动)
-python train_base_model.py      # 2. 基础模型训练 (70% Train)
-python fine_tune_model.py       # 3. 微调 (30% Train, 消融/蒸馏)
-python evaluate_model.py        # 4. 评估, 图表输出至 cnn_output/
+python train_base_model.py      # 基础训练
+python fine_tune_model.py       # 微调 (消融/蒸馏)
+python evaluate_model.py        # 评估
 ```
 
 ### 传统方案 (MATLAB)
-
-1. 运行 `find_all_parameter.m` 提取特征
-2. 运行 `train_SBP.m` / `train_DBP.m` 训练 SVR
-3. 运行 `find_result.m` 汇总结果
+```matlab
+find_all_parameter              % 特征提取
+train_SBP / train_DBP           % SVR 训练
+find_result                     % 结果汇总
+```
