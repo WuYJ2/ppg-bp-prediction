@@ -1,6 +1,7 @@
 # PPG 无创血压预测项目
 
 基于光电容积脉搏波 (PPG) 信号预测收缩压 (SBP) 和舒张压 (DBP)，包含两套方案：
+
 - **传统方案**: 手工特征提取 + SVR 回归 (MATLAB)
 - **深度学习方案**: 1D-ResNet 端到端预测 (PyTorch)
 
@@ -89,13 +90,13 @@ Input (3, 2048)
 
 ### 2. 微调 (`fine_tune_model.py`)
 
-| 配置项 | 说明 |
-|--------|------|
-| `USE_DISTILL` | **消融实验开关**: `True`=蒸馏微调, `False`=无蒸馏 (仅冻结+混合) |
-| `DISTILL_WEIGHT` | α: 蒸馏损失权重 (0.2-0.7, 默认 0.4) |
-| `TEMPERATURE` | T: 温度 (2-4, 默认 3.0) |
-| `FT_DATA_RATIO` | 每批中新数据占比 (默认 0.5) |
-| `FROZEN_MODULES` | 冻结 `conv1 + bn1 + layer1 + layer2` |
+| 配置项              | 说明                                            |
+| ---------------- | --------------------------------------------- |
+| `USE_DISTILL`    | **消融实验开关**: `True`=蒸馏微调, `False`=无蒸馏 (仅冻结+混合) |
+| `DISTILL_WEIGHT` | α: 蒸馏损失权重 (0.2-0.7, 默认 0.4)                   |
+| `TEMPERATURE`    | T: 温度 (2-4, 默认 3.0)                           |
+| `FT_DATA_RATIO`  | 每批中新数据占比 (默认 0.5)                             |
+| `FROZEN_MODULES` | 冻结 `conv1 + bn1 + layer1 + layer2`            |
 
 **损失函数**:
 
@@ -115,74 +116,77 @@ Input (3, 2048)
 
 ### 训练曲线
 
-| 文件 | 说明 |
-|------|------|
+| 文件                        | 说明                                              |
+| ------------------------- | ----------------------------------------------- |
 | `base_training_curve.png` | 基础模型训练曲线: 蓝色=训练 Loss, 红色=验证 Loss (对数坐标), x=迭代次数 |
-| `finetune_curve.png` | 微调训练曲线: 蓝色=每个 epoch 的平均 Loss |
+| `finetune_curve.png`      | 微调训练曲线: 蓝色=每个 epoch 的平均 Loss                    |
 
 ### Bland-Altman 一致性分析 (`BA_*.png`)
 
 每张图左右并排展示 SBP 和 DBP 的 Bland-Altman 图:
+
 - **x 轴**: 真实值与预测值的均值 (mmHg)
 - **y 轴**: 差值 Predicted - True (mmHg)
 - 蓝色散点: 每个测试样本
 - 红色实线: 平均偏差 (mean difference)
 - 红色虚线: 95% 一致性界限 (mean ± 1.96×SD)
 
-| 文件 | 模型 | 测试集 |
-|------|------|--------|
-| `BA_base_test.png` | 基础模型 | 公开测试集 |
-| `BA_finetuned_test.png` | 微调模型 | 公开测试集 |
-| `BA_base_public.png` | 基础模型 | 公开测试集 (旧版) |
-| `BA_finetuned_public.png` | 微调模型 | 公开测试集 (旧版) |
-| `BA_base_self.png` | 基础模型 | 自建测试集 (已废弃) |
-| `BA_finetuned_self.png` | 微调模型 | 自建测试集 (已废弃) |
+| 文件                        | 模型   | 测试集         |
+| ------------------------- | ---- | ----------- |
+| `BA_base_test.png`        | 基础模型 | 公开测试集       |
+| `BA_finetuned_test.png`   | 微调模型 | 公开测试集       |
+| `BA_base_public.png`      | 基础模型 | 公开测试集 (旧版)  |
+| `BA_finetuned_public.png` | 微调模型 | 公开测试集 (旧版)  |
+| `BA_base_self.png`        | 基础模型 | 自建测试集 (已废弃) |
+| `BA_finetuned_self.png`   | 微调模型 | 自建测试集 (已废弃) |
 
 ### 相关性散点图 (`Corr_*.png`)
 
 每张图左右并排展示 SBP 和 DBP 的相关性:
+
 - **x 轴**: 真实值 (mmHg)
 - **y 轴**: 预测值 (mmHg)
 - 黑色虚线: y=x 理想对角线
 - 红色实线: 最小二乘拟合线
 - 右下角: Pearson 相关系数 r
 
-| 文件 | 模型 | 测试集 |
-|------|------|--------|
-| `Corr_base_test.png` | 基础模型 | 公开测试集 |
-| `Corr_finetuned_test.png` | 微调模型 | 公开测试集 |
-| `Corr_base_public.png` | 基础模型 | 公开测试集 (旧版) |
-| `Corr_finetuned_public.png` | 微调模型 | 公开测试集 (旧版) |
-| `Corr_base_self.png` | 基础模型 | 自建测试集 (已废弃) |
-| `Corr_finetuned_self.png` | 微调模型 | 自建测试集 (已废弃) |
+| 文件                          | 模型   | 测试集         |
+| --------------------------- | ---- | ----------- |
+| `Corr_base_test.png`        | 基础模型 | 公开测试集       |
+| `Corr_finetuned_test.png`   | 微调模型 | 公开测试集       |
+| `Corr_base_public.png`      | 基础模型 | 公开测试集 (旧版)  |
+| `Corr_finetuned_public.png` | 微调模型 | 公开测试集 (旧版)  |
+| `Corr_base_self.png`        | 基础模型 | 自建测试集 (已废弃) |
+| `Corr_finetuned_self.png`   | 微调模型 | 自建测试集 (已废弃) |
 
 ### 预测值折线图 (`Line_*.png`)
 
 每张图左右并排展示 SBP 和 DBP 前 80 个样本:
+
 - **蓝色实线**: 真实值
 - **红色实线**: 预测值
 - x 轴: 样本序号
 
-| 文件 | 模型 | 测试集 |
-|------|------|--------|
-| `Line_base_test.png` | 基础模型 | 公开测试集 |
-| `Line_finetuned_test.png` | 微调模型 | 公开测试集 |
-| `Line_base_public.png` | 基础模型 | 公开测试集 (旧版) |
-| `Line_finetuned_public.png` | 微调模型 | 公开测试集 (旧版) |
-| `Line_base_self.png` | 基础模型 | 自建测试集 (已废弃) |
-| `Line_finetuned_self.png` | 微调模型 | 自建测试集 (已废弃) |
+| 文件                          | 模型   | 测试集         |
+| --------------------------- | ---- | ----------- |
+| `Line_base_test.png`        | 基础模型 | 公开测试集       |
+| `Line_finetuned_test.png`   | 微调模型 | 公开测试集       |
+| `Line_base_public.png`      | 基础模型 | 公开测试集 (旧版)  |
+| `Line_finetuned_public.png` | 微调模型 | 公开测试集 (旧版)  |
+| `Line_base_self.png`        | 基础模型 | 自建测试集 (已废弃) |
+| `Line_finetuned_self.png`   | 微调模型 | 自建测试集 (已废弃) |
 
 ### 模型对比
 
-| 文件 | 说明 |
-|------|------|
+| 文件                     | 说明                                                         |
+| ---------------------- | ---------------------------------------------------------- |
 | `model_comparison.png` | 基础模型 vs 微调模型: 4 个子图分别对比 SBP_MAE, SBP_STD, DBP_MAE, DBP_STD |
 
 ### 预测值数据
 
-| 文件 | 内容 |
-|------|------|
-| `predictions_base.npz` | 基础模型预测: `y_true`, `y_pred`, `res` |
+| 文件                          | 内容                                |
+| --------------------------- | --------------------------------- |
+| `predictions_base.npz`      | 基础模型预测: `y_true`, `y_pred`, `res` |
 | `predictions_finetuned.npz` | 微调模型预测: `y_true`, `y_pred`, `res` |
 
 ---
@@ -190,51 +194,56 @@ Input (3, 2048)
 ## 传统方案 (MATLAB SVR)
 
 ### 特征提取
+
 **`find_all_parameter.m`** 读取 `dataset/PPG/`, 调用 `find_parameter_amend()` 计算 78 维特征, 输出至 `output/`。
 
 **78 维特征分类:**
 
-| 类别 | 特征编号 | 数量 | 说明 |
-|------|---------|------|------|
-| 时间域 | 1-8, 12-13, 23-24, 36-42, 45-46 | 22 | 收缩/舒张时间、脉宽、周期、波峰幅值等 |
-| 面积 | 9-11, 43-44 | 5 | 升支/降支面积及其比值 |
-| 一阶微分 | 14-22 | 9 | 变化速率相关特征 |
-| 频域 | 25-35, 64-78 | 26 | 基频/谐波、频带能量及能量比 |
-| 小波变换 | 47-63 | 17 | 细节系数能量、IMF 能量矩、HHT 边际谱能量 |
+| 类别   | 特征编号                            | 数量  | 说明                       |
+| ---- | ------------------------------- | --- | ------------------------ |
+| 时间域  | 1-8, 12-13, 23-24, 36-42, 45-46 | 22  | 收缩/舒张时间、脉宽、周期、波峰幅值等      |
+| 面积   | 9-11, 43-44                     | 5   | 升支/降支面积及其比值              |
+| 一阶微分 | 14-22                           | 9   | 变化速率相关特征                 |
+| 频域   | 25-35, 64-78                    | 26  | 基频/谐波、频带能量及能量比           |
+| 小波变换 | 47-63                           | 17  | 细节系数能量、IMF 能量矩、HHT 边际谱能量 |
 
 ### SVR 模型训练
+
 **`train_SBP.m`** / **`train_DBP.m`**: 特征选择 → 归一化 → ε-SVR (径向基核) → MAE/STD → Bland-Altman + 相关性图, 结果保存至 `result/`。
 
 ### 预处理 (可选)
-| 函数 | 功能 |
-|------|------|
-| `fselect_x(signal)` | 检测并去除尖峰异常段 |
-| `fdenoise_x(signal)` | 低通滤波 + 基线漂移去除 |
+
+| 函数                     | 功能              |
+| ---------------------- | --------------- |
+| `fselect_x(signal)`    | 检测并去除尖峰异常段      |
+| `fdenoise_x(signal)`   | 低通滤波 + 基线漂移去除   |
 | `fmoveaverage_x(wine)` | Hamming 窗移动平均平滑 |
-| `fabnormal_x(wine)` | 基于特征均值阈值剔除异常样本 |
+| `fabnormal_x(wine)`    | 基于特征均值阈值剔除异常样本  |
 
 ---
 
 ## 分支管理
 
-| 分支 | 说明 |
-|------|------|
-| `v1.0` | 初始版本: MATLAB SVR + CNN, 自建数据微调 |
-| `v1.1` | 数据策略改为公开数据集 7:3 内部分割 |
-| `v1.2` | 消融实验: 新增 `USE_DISTILL` 开关, 关闭蒸馏 |
-| `master` | 开发主线 (当前 = v1.2) |
+| 分支       | 说明                              |
+| -------- | ------------------------------- |
+| `v1.0`   | 初始版本: MATLAB SVR + CNN, 自建数据微调  |
+| `v1.1`   | 数据策略改为公开数据集 7:3 内部分割            |
+| `v1.2`   | 消融实验: 新增 `USE_DISTILL` 开关, 关闭蒸馏 |
+| `master` | 开发主线 (当前 = v1.2)                |
 
 ---
 
 ## 依赖项
 
 ### 深度学习方案
+
 - **Python 3.9+**
 - **PyTorch** 2.x (CUDA 推荐)
 - **numpy, scipy, h5py** — 数据加载
 - **matplotlib** — 图表绘制
 
 ### 传统方案 (MATLAB)
+
 - **MATLAB** R2019b+
 - **LIBSVM** / **Wavelet Toolbox** / **Signal Processing Toolbox** / **Statistics and ML Toolbox**
 
