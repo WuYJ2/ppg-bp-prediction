@@ -11,23 +11,44 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 RESULT_DIR = ROOT / "cnn_output" / "domain_adaptation"
-FIG_DIR = ROOT / "reports" / "figures_optimized"
+FIG_DIR = ROOT / "reports" / "figures_optimized"  # 输出目录
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-SHOTS = [64, 128, 253]
+# 优化后实验: 更大样本量 + 输出校准
 METHODS = {"feature_da": "Feature DA + Calibration", "lwf": "LwF + Calibration"}
 COLORS = {"feature_da": "#1f77b4", "lwf": "#ff7f0e", "base": "#6c757d"}
+SHOTS = []  # 运行时自动检测
 
 
 def load_results():
+    """优先扫描 *_calibrated_results.json, 若不存在则回退到普通 *_results.json"""
     out = {}
-    for shot in SHOTS:
-        with open(RESULT_DIR / f"fewshot_{shot}_calibrated_results.json", "r", encoding="utf-8") as f:
-            out[shot] = json.load(f)
-    return out
+    if not RESULT_DIR.exists():
+        raise FileNotFoundError(f"结果目录不存在: {RESULT_DIR}\n请先运行 domain_adaptation_experiments.py")
+
+    # 优先校准结果, 回退普通结果
+    for pattern, label in [("fewshot_*_calibrated_results.json", "校准"), ("fewshot_*_results.json", "普通")]:
+        for path in sorted(RESULT_DIR.glob(pattern)):
+            stem = path.stem
+            try:
+                shot = int(stem.split("_")[1])
+            except (IndexError, ValueError):
+                continue
+            if shot in out:
+                continue  # 校准结果优先
+            with path.open("r", encoding="utf-8") as f:
+                out[shot] = json.load(f)
+        if out:
+            global SHOTS
+            SHOTS = sorted(out.keys())
+            print(f'加载{label}结果: {SHOTS} shot')
+            return out
+
+    raise FileNotFoundError(f"{RESULT_DIR} 中未找到结果文件, 请先运行 domain_adaptation_experiments.py")
 
 
 def plot_method(method, results):
+    """为单个方法生成 3 张图: 指标柱状图 + MAE 趋势图 + 最大样本量散点图"""
     metrics = ["SBP_MAE", "SBP_STD", "DBP_MAE", "DBP_STD"]
     titles = ["SBP MAE", "SBP STD", "DBP MAE", "DBP STD"]
     fig, axes = plt.subplots(2, 2, figsize=(11, 7.5))
@@ -46,9 +67,10 @@ def plot_method(method, results):
     axes[0, 0].legend(loc="best")
     fig.suptitle(f"{METHODS[method]} Metrics", fontsize=14, weight="bold")
     fig.tight_layout()
-    fig.savefig(FIG_DIR / f"{method}_optimized_bars.png", dpi=220)
+    fig.savefig(FIG_DIR / f"{method}_optimized_bars.png", dpi=220)  # 图1: 柱状图
     plt.close(fig)
 
+    # ---- MAE 趋势折线图 ----
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.3))
     for ax, metric, title in zip(axes, ["SBP_MAE", "DBP_MAE"], ["SBP MAE", "DBP MAE"]):
         for name in ["base", method]:
@@ -62,11 +84,24 @@ def plot_method(method, results):
         ax.grid(alpha=0.3)
     axes[0].legend(loc="best")
     fig.tight_layout()
-    fig.savefig(FIG_DIR / f"{method}_optimized_trend.png", dpi=220)
+    fig.savefig(FIG_DIR / f"{method}_optimized_trend.png", dpi=220)  # 图2: 趋势图
     plt.close(fig)
 
+    # ---- 253-shot 散点图 ----
+    # 自动找最大 shot 的预测文件 (优先校准版本)
+    for pattern in ["fewshot_*_calibrated_predictions.npz", "fewshot_*_predictions.npz"]:
+        pred_files = sorted(RESULT_DIR.glob(pattern))
+        if pred_files:
+            def _shot(p):
+                try: return int(p.stem.split("_")[1])
+                except: return 0
+            best_file = max(pred_files, key=_shot)
+            shot = _shot(best_file)
+            break
+    else:
+        raise FileNotFoundError(f"{RESULT_DIR} 中未找到预测文件")
     pred_key = "feature_da_pred" if method == "feature_da" else "lwf_pred"
-    data = np.load(RESULT_DIR / "fewshot_253_calibrated_predictions.npz")
+    data = np.load(best_file)
     y_true = data["y_true"]
     y_pred = data[pred_key]
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 5))
@@ -96,7 +131,7 @@ def plot_method(method, results):
                 bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="#cccccc", alpha=0.92))
         ax.grid(alpha=0.25)
         ax.legend(loc="lower right")
-    fig.suptitle(f"{METHODS[method]} on Self-built Test Set (253-shot)", fontsize=15, weight="bold")
+    fig.suptitle(f"{METHODS[method]} on Self-built Test Set ({shot}-shot)", fontsize=15, weight="bold")
     fig.tight_layout()
     fig.savefig(FIG_DIR / f"{method}_optimized_scatter.png", dpi=220)
     plt.close(fig)

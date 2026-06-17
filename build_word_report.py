@@ -252,10 +252,10 @@ def build_docx() -> Path:
 
     doc.add_heading("复现实验命令", level=1)
     cmd = (
-        ".\\.venv\\Scripts\\python.exe domain_adaptation_experiments.py "
-        "--public-dir \"D:\\专业实习\\ppg-bp-prediction-master\\_provided_dataset_run\\数据集\\1、公开数据集\" "
-        "--self-dir \"D:\\专业实习\\程序 - 5.13(1)\\程序 - 5.13\\dataset\" "
-        "--shots 64 --epochs 40 --batch-size 16 --cpu"
+        'python domain_adaptation_experiments.py '
+        '--public-dir "数据集/1、公开数据集" '
+        '--self-dir "dataset" '
+        '--shots 64 --epochs 40 --batch-size 16 --cpu'
     )
     p = doc.add_paragraph()
     r = p.add_run(cmd)

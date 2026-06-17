@@ -1,4 +1,12 @@
-"""Plot few-shot domain adaptation experiment results."""
+"""Plot few-shot domain adaptation experiment results.
+绘制域适应实验结果的 7 种图表:
+1. fewshot_metric_bars.png — 三方法 × 三样本量 × 四指标柱状图
+2. fewshot_mae_trends.png — SBP/DBP MAE 随样本量变化趋势
+3. fewshot_64_scatter.png — 64-shot 三方法 SBP/DBP 散点图矩阵
+4-5. {method}_metric_bars.png — 单方法 vs Base 指标柱状图 × 2
+6-7. {method}_mae_trends.png — 单方法 vs Base 趋势图 × 2
+8-9. {method}_64_scatter.png — 单方法 vs Base 散点图 × 2
+"""
 
 from __future__ import annotations
 
@@ -28,17 +36,30 @@ METHOD_LABELS = {
 
 
 def load_results() -> dict[int, dict]:
+    """自动扫描 cnn_output/domain_adaptation/ 下的 *_results.json, 按 shot 数加载"""
     results = {}
-    for shot in (16, 32, 64):
-        with (RESULT_DIR / f"fewshot_{shot}_results.json").open("r", encoding="utf-8") as f:
+    if not RESULT_DIR.exists():
+        raise FileNotFoundError(f"结果目录不存在: {RESULT_DIR}\n请先运行 domain_adaptation_experiments.py")
+    for path in sorted(RESULT_DIR.glob("fewshot_*_results.json")):
+        # 从文件名提取 shot 数: fewshot_32_results.json → 32
+        stem = path.stem  # fewshot_32_results
+        try:
+            shot = int(stem.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        with path.open("r", encoding="utf-8") as f:
             results[shot] = json.load(f)
+    if not results:
+        raise FileNotFoundError(f"{RESULT_DIR} 中未找到 *_results.json, 请先运行 domain_adaptation_experiments.py")
+    print(f'加载结果: {sorted(results.keys())} shot')
     return results
 
 
 def plot_metric_bars(results: dict[int, dict]) -> Path:
+    """三方法 (Base/Feature DA/LwF) × 多样本量 × 四指标 (SBP_MAE/STD, DBP_MAE/STD) 分组柱状图"""
     metrics = ["SBP_MAE", "SBP_STD", "DBP_MAE", "DBP_STD"]
     titles = ["SBP MAE", "SBP STD", "DBP MAE", "DBP STD"]
-    shots = [16, 32, 64]
+    shots = sorted(results.keys())
     methods = ["base", "feature_da", "lwf"]
     colors = {"base": "#6c757d", "feature_da": "#1f77b4", "lwf": "#ff7f0e"}
 
@@ -64,7 +85,8 @@ def plot_metric_bars(results: dict[int, dict]) -> Path:
 
 
 def plot_mae_trends(results: dict[int, dict]) -> Path:
-    shots = [16, 32, 64]
+    """SBP/DBP MAE 随目标域样本数变化的折线趋势图 (三方法对比)"""
+    shots = sorted(results.keys())
     methods = ["base", "feature_da", "lwf"]
     colors = {"base": "#6c757d", "feature_da": "#1f77b4", "lwf": "#ff7f0e"}
 
@@ -86,8 +108,20 @@ def plot_mae_trends(results: dict[int, dict]) -> Path:
     return path
 
 
-def plot_best_scatter() -> Path:
-    data = np.load(RESULT_DIR / "fewshot_64_predictions.npz")
+def plot_best_scatter(results: dict[int, dict] | None = None) -> Path:
+    """最大样本量下三方法 SBP/DBP 真实值 vs 预测值散点图矩阵 (3×2 subplots)"""
+    # 自动找最大 shot 的预测文件
+    pred_files = sorted(RESULT_DIR.glob("fewshot_*_predictions.npz"))
+    if not pred_files:
+        raise FileNotFoundError(f"{RESULT_DIR} 中未找到预测文件, 请先运行 domain_adaptation_experiments.py")
+    # 按 shot 数排序, 取最大
+    def shot_from_name(p):
+        try: return int(p.stem.split("_")[1])
+        except: return 0
+    best_file = max(pred_files, key=shot_from_name)
+    shot = shot_from_name(best_file)
+    print(f'  使用 {shot}-shot 预测数据')
+    data = np.load(best_file)
     y_true = data["y_true"]
     preds = {
         "Base": data["base_pred"],
@@ -112,7 +146,7 @@ def plot_best_scatter() -> Path:
             ax.set_xlabel(f"True {bp_name} (mmHg)")
             ax.set_ylabel(f"Predicted {bp_name} (mmHg)")
             ax.grid(alpha=0.25)
-    fig.suptitle("64-shot Predictions on Self-built Test Set", fontsize=14)
+    fig.suptitle(f"{shot}-shot Predictions on Self-built Test Set", fontsize=14)
     fig.tight_layout()
     path = REPORT_IMG_DIR / "fewshot_64_scatter.png"
     fig.savefig(path, dpi=180)
@@ -121,9 +155,10 @@ def plot_best_scatter() -> Path:
 
 
 def plot_method_metric_bars(results: dict[int, dict], method: str) -> Path:
+    """单方法 vs Base 的分组柱状图 (按样本量分组)"""
     metrics = ["SBP_MAE", "SBP_STD", "DBP_MAE", "DBP_STD"]
     titles = ["SBP MAE", "SBP STD", "DBP MAE", "DBP STD"]
-    shots = [16, 32, 64]
+    shots = sorted(results.keys())
     colors = {"base": "#6c757d", method: "#1f77b4" if method == "feature_da" else "#ff7f0e"}
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 7.5))
@@ -148,7 +183,8 @@ def plot_method_metric_bars(results: dict[int, dict], method: str) -> Path:
 
 
 def plot_method_mae_trends(results: dict[int, dict], method: str) -> Path:
-    shots = [16, 32, 64]
+    """单方法 vs Base 的 SBP/DBP MAE 随样本量变化趋势折线图"""
+    shots = sorted(results.keys())
     colors = {"base": "#6c757d", method: "#1f77b4" if method == "feature_da" else "#ff7f0e"}
 
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.3))
@@ -169,8 +205,19 @@ def plot_method_mae_trends(results: dict[int, dict], method: str) -> Path:
     return path
 
 
-def plot_method_scatter(method: str) -> Path:
-    data = np.load(RESULT_DIR / "fewshot_64_predictions.npz")
+def plot_method_scatter(method: str, results: dict[int, dict] | None = None) -> Path:
+    """单方法 vs Base 最大样本量 SBP/DBP 散点图对比 (2×2 subplots)"""
+    # 自动找最大 shot 的预测文件
+    pred_files = sorted(RESULT_DIR.glob("fewshot_*_predictions.npz"))
+    if not pred_files:
+        raise FileNotFoundError(f"{RESULT_DIR} 中未找到预测文件")
+    def shot_from_name(p):
+        try: return int(p.stem.split("_")[1])
+        except: return 0
+    best_file = max(pred_files, key=shot_from_name)
+    shot = shot_from_name(best_file)
+    print(f'  使用 {shot}-shot 预测数据')
+    data = np.load(best_file)
     y_true = data["y_true"]
     base_pred = data["base_pred"]
     method_pred = data["feature_da_pred" if method == "feature_da" else "lwf_pred"]
@@ -192,7 +239,7 @@ def plot_method_scatter(method: str) -> Path:
             ax.set_xlabel(f"True {bp_name} (mmHg)")
             ax.set_ylabel(f"Predicted {bp_name} (mmHg)")
             ax.grid(alpha=0.25)
-    fig.suptitle(f"64-shot {METHOD_LABELS[method]} Predictions vs Base", fontsize=14)
+    fig.suptitle(f"{shot}-shot {METHOD_LABELS[method]} Predictions vs Base", fontsize=14)
     fig.tight_layout()
     path = REPORT_IMG_DIR / f"{method}_64_scatter.png"
     fig.savefig(path, dpi=180)

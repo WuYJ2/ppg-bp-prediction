@@ -4,6 +4,7 @@
 - **传统方案**: 手工特征提取 + SVR 回归 (MATLAB)
 - **深度学习方案**: 1D-ResNet 端到端预测 (PyTorch)
 - **GPR 方案**: 手工特征 + 高斯过程回归 (MATLAB)
+- **域适应方案**: 小样本域适应微调 (Feature DA / LwF)
 
 ## 项目结构
 
@@ -18,6 +19,13 @@
 ├── train_gpr.m                # [GPR] 公开特征 → GPR 基础模型训练
 ├── finetune_gpr.m             # [GPR] 公开+自建混合 → GPR 微调
 ├── evaluate_gpr.m             # [GPR] 双数据集评估 (base vs finetuned)
+│
+├── domain_adaptation_experiments.py  # [DA] 小样本域适应实验 (CORAL/LwF)
+├── plot_domain_adaptation_results.py # [DA] 域适应结果绘图
+├── plot_optimized_results.py         # [DA] 优化版结果绘图 (含校准)
+├── make_best_scatter.py              # [DA] 最优结果精修散点图
+├── build_word_report.py              # [DA] 实验报告生成 (Word)
+├── build_optimized_word_report.py    # [DA] 优化版报告生成
 │
 ├── find_all_parameter.m       # [主程序] 批量特征提取脚本
 ├── find_parameter_amend.m     # [核心函数] 单条 PPG 信号的 78 维特征计算
@@ -54,6 +62,9 @@
 ├── cnn_output/                # 1D-ResNet 评估图表 + 预测值
 ├── gpr_models/                # GPR 模型 (.mat)
 ├── gpr_output/                # GPR 评估图表 + 预测值
+├── cnn_output/
+│   └── domain_adaptation/     # 域适应实验结果 + 图表
+├── reports/                   # 实验报告 (.docx + figures/)
 ├── result/                    # SVR 模型训练结果 (MATLAB)
 └── output/                    # 特征提取结果 (MATLAB)
 ```
@@ -114,6 +125,39 @@
 | 模型 | 数据集 |
 |------|--------|
 | `base` / `finetuned` | `pub` (公开测试集) / `self` (自建测试集) |
+
+---
+
+## 域适应方案 (PyTorch)
+
+### 数据流
+
+```
+公开 PPG (4745, 源域) ──→ Base 1D-ResNet ──→ 跨域基线
+自建 PPG (253, 目标域) ──→ Few-shot 采样 ──→ Feature DA / LwF 微调
+自建 Test (152) ──→ 评估 MAE/STD
+```
+
+### 1. 实验运行 (`domain_adaptation_experiments.py`)
+
+对比两种小样本域适应策略:
+
+| 方法 | 说明 | 损失函数 |
+|------|------|---------|
+| **Base** | 不做适配, 直接跨域预测 | — |
+| **Feature DA** | CORAL 对齐 GAP 特征分布 | MSE + λ × CORAL(feat_src, feat_tgt) |
+| **LwF** | teacher 输出保持约束 | MSE + λ × MSE(student_src, teacher_src) |
+
+训练时自动生成散点图、损失曲线、指标柱状图。
+
+### 2. 结果可视化
+
+| 脚本 | 输出 |
+|------|------|
+| `plot_domain_adaptation_results.py` | 柱状图 + MAE 趋势 + 三方法散点对比 |
+| `plot_optimized_results.py` | 优化版 (含校准) 图表 |
+| `make_best_scatter.py` | 最优结果精修散点图 |
+| `build_word_report.py` | 实验报告 (.docx) |
 
 ---
 
@@ -202,7 +246,8 @@ Input (3, 2048)
 | `v1.1` | 数据策略改为公开数据集 7:3 内部分割 |
 | `v1.2` | 消融实验: 新增 `USE_DISTILL` 开关 |
 | `v2.0` | GPR 方案: 公开特征 + 自建特征, 双数据集评估 |
-| `master` | 开发主线 (当前 = v2.0) |
+| `v3.0` | 域适应方案: Feature DA / LwF 小样本迁移 |
+| `master` | 开发主线 (当前 = v3.0) |
 
 ---
 
@@ -236,6 +281,15 @@ evaluate_gpr      % 3. 评估 (双数据集对比)
 python train_base_model.py      # 基础训练
 python fine_tune_model.py       # 微调 (消融/蒸馏)
 python evaluate_model.py        # 评估
+```
+
+### 域适应方案
+```bash
+python domain_adaptation_experiments.py --shots 32
+python domain_adaptation_experiments.py --shots 64 --calibrate
+python plot_domain_adaptation_results.py
+python make_best_scatter.py
+python build_word_report.py
 ```
 
 ### 传统方案 (MATLAB)
