@@ -18,7 +18,7 @@ __pycache__/
 # Generated outputs (MATLAB)
 result/
 output/
-
+reports/
 # Claude local config
 .claude/
 
