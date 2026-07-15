@@ -32,7 +32,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from model import ResNet1D, apply_normalize_3ch, load_public_dataset, normalize_bp, preprocess_ppg
+from model import ResNet1D, apply_normalize_3ch, load_public_dataset, normalize_bp, preprocess_ppg, safe_torch_save, safe_torch_load
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -178,7 +178,7 @@ def load_norm_stats(model_dir: Path) -> Tuple[Dict[str, np.ndarray], np.ndarray,
 
 def load_model(model_dir: Path, filename: str, device: torch.device) -> ResNetWithFeatures:
     model = ResNetWithFeatures(in_channels=3, num_outputs=2).to(device)
-    state = torch.load(model_dir / filename, map_location=device, weights_only=True)
+    state = safe_torch_load(str(model_dir / filename), map_location=device, weights_only=True)
     model.load_state_dict(state)
     return model
 

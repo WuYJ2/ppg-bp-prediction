@@ -1,7 +1,10 @@
 """
-train_base_model.py — 使用公开数据集训练 1D-ResNet 基础模型
+train_base_model.py — 使用公开数据集全量训练 1D-ResNet 基础模型
 输入: PPG + 一阶导数 + 二阶导数 (3 通道)
 输出: SBP / DBP (双输出回归)
+
+训练策略: 公开数据集全量训练 (4745 样本) → 基础模型
+          后续由 fine_tune_model.py 在自建数据集上进行跨域微调。
 
 依赖: torch, numpy, scipy, model.py
 用法: python train_base_model.py
@@ -18,7 +21,8 @@ import time
 # 导入共享模块
 from model import (
     ResNet1D, load_public_dataset,
-    preprocess_ppg, normalize_3ch, apply_normalize_3ch, normalize_bp
+    preprocess_ppg, normalize_3ch, apply_normalize_3ch, normalize_bp,
+    safe_torch_save
 )
 
 # ============================================================
@@ -52,40 +56,18 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {DEVICE}')
 
 # ============================================================
-# 加载数据
+# 加载数据 (公开数据集全量训练, 不做内部拆分)
 # ============================================================
-print('=== 加载公开数据集 ===')
+print('=== 加载公开数据集 (全量) ===')
 data = load_public_dataset(PUBLIC_DATA_PATH)
 
-X_train_raw = data['train']['ppg']
+X_train_raw = data['train']['ppg']       # 4745 样本
 Y_train_sbp = data['train']['sbp']
 Y_train_dbp = data['train']['dbp']
-
-# --- 应用 70/30 拆分 (只取基础训练部分) ---
-split_file = os.path.join(MODEL_SAVE_PATH, 'train_split.npz')
-if os.path.exists(split_file):
-    split = np.load(split_file)
-    base_idx = split['base_idx']
-    print(f'加载拆分索引: base={len(base_idx)} 样本')
-else:
-    # 首次运行: 自动生成拆分
-    rng = np.random.RandomState(42)
-    n_total = len(Y_train_sbp)
-    idx = rng.permutation(n_total)
-    n_base = int(n_total * 0.7)
-    base_idx = np.sort(idx[:n_base])
-    ft_idx = np.sort(idx[n_base:])
-    np.savez(split_file, base_idx=base_idx, ft_idx=ft_idx, seed=42, ratio=0.7)
-    print(f'自动生成拆分: base={len(base_idx)}, ft={len(ft_idx)}')
-
-X_train_raw = X_train_raw[base_idx]
-Y_train_sbp = Y_train_sbp[base_idx]
-Y_train_dbp = Y_train_dbp[base_idx]
-print(f'基础训练样本数: {len(X_train_raw)}')
-X_val_raw   = data['val']['ppg']
+X_val_raw   = data['val']['ppg']         # 1577 样本
 Y_val_sbp   = data['val']['sbp']
 Y_val_dbp   = data['val']['dbp']
-X_test_raw  = data['test']['ppg']
+X_test_raw  = data['test']['ppg']        # 1582 样本
 Y_test_sbp  = data['test']['sbp']
 Y_test_dbp  = data['test']['dbp']
 
@@ -198,7 +180,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_epoch = epoch
-                torch.save(model.state_dict(),
+                safe_torch_save(model.state_dict(),
                            os.path.join(MODEL_SAVE_PATH, 'base_model_best.pth'))
                 print(f'  [Iter {iteration}] 最佳模型已保存, ValLoss={val_loss:.4f}')
 
@@ -218,7 +200,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         best_epoch = epoch
-        torch.save(model.state_dict(),
+        safe_torch_save(model.state_dict(),
                    os.path.join(MODEL_SAVE_PATH, 'base_model_best.pth'))
 
 print(f'最佳验证损失: {best_val_loss:.4f} (Epoch {best_epoch})')
@@ -226,7 +208,7 @@ print(f'最佳验证损失: {best_val_loss:.4f} (Epoch {best_epoch})')
 # ============================================================
 # 保存最终模型
 # ============================================================
-torch.save(model.state_dict(),
+safe_torch_save(model.state_dict(),
            os.path.join(MODEL_SAVE_PATH, 'base_model_final.pth'))
 print(f'模型保存至 {MODEL_SAVE_PATH}')
 

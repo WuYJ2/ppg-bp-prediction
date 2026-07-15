@@ -1,5 +1,5 @@
 %% evaluate_gpr.m
-% 评估 GPR 基础模型与微调模型在公开测试集和自建测试集上的性能
+% 评估 GPR 基础模型与微调模型在公开/自建测试集上的性能 — 7 特征版
 %
 % 依赖: train_gpr.m 输出的 gpr_base.mat
 %       finetune_gpr.m 输出的 gpr_finetuned.mat (可选)
@@ -13,6 +13,9 @@ selfDataPath   = fullfile(scriptDir, '数据集', '2、自建数据集');
 modelSavePath  = fullfile(scriptDir, 'gpr_models');
 outputPath     = fullfile(scriptDir, 'gpr_output');
 mkdir(outputPath);
+
+% 选择 7 个特征 (1-indexed, 与 train_gpr.m / finetune_gpr.m 一致)
+FEATURE_IDS = [7, 23, 26, 32, 42, 43, 44];
 
 EVAL_MODE = 'both';  % 'base' | 'finetuned' | 'both'
 
@@ -45,16 +48,17 @@ if isempty(fieldnames(models))
     error('未找到任何模型文件, 请先运行 train_gpr.m');
 end
 
-%% ==================== 加载测试数据 ====================
-fprintf('\n=== 加载测试数据 ===\n');
+%% ==================== 加载测试数据 (78→7 特征) ====================
+fprintf('\n=== 加载测试数据 (78维→7维) ===\n');
 
 % --- 公开测试集 ---
 pubParam = load(fullfile(publicDataPath, 'TestParameter.mat'));
 pubSBP   = load(fullfile(publicDataPath, 'TestSBP.mat'));
 pubDBP   = load(fullfile(publicDataPath, 'TestDBP.mat'));
 
-X_pub = pubParam.TestParameter;
-if size(X_pub, 2) ~= 78 && size(X_pub, 1) == 78, X_pub = X_pub'; end
+X_pub_full = pubParam.TestParameter;
+if size(X_pub_full, 2) ~= 78 && size(X_pub_full, 1) == 78, X_pub_full = X_pub_full'; end
+X_pub = X_pub_full(:, FEATURE_IDS);  % 选取 7 特征
 Y_pub_sbp = pubSBP.TestSBP(:);
 Y_pub_dbp = pubDBP.TestDBP(:);
 valid = all(isfinite(X_pub), 2);
@@ -65,15 +69,16 @@ selfParam = load(fullfile(selfDataPath, 'TestParameter.mat'));
 selfSBP   = load(fullfile(selfDataPath, 'TestSBP.mat'));
 selfDBP   = load(fullfile(selfDataPath, 'TestDBP.mat'));
 
-X_self = selfParam.TestParameter;
-if size(X_self, 2) ~= 78 && size(X_self, 1) == 78, X_self = X_self'; end
+X_self_full = selfParam.TestParameter;
+if size(X_self_full, 2) ~= 78 && size(X_self_full, 1) == 78, X_self_full = X_self_full'; end
+X_self = X_self_full(:, FEATURE_IDS);  % 选取 7 特征
 Y_self_sbp = selfSBP.TestSBP(:);
 Y_self_dbp = selfDBP.TestDBP(:);
 valid = all(isfinite(X_self), 2);
 X_self = X_self(valid, :); Y_self_sbp = Y_self_sbp(valid); Y_self_dbp = Y_self_dbp(valid);
 
-fprintf('公开测试集: %d 样本\n', size(X_pub, 1));
-fprintf('自建测试集: %d 样本\n', size(X_self, 1));
+fprintf('公开测试集: %d 样本, %d 特征\n', size(X_pub, 1), size(X_pub, 2));
+fprintf('自建测试集: %d 样本, %d 特征\n', size(X_self, 1), size(X_self, 2));
 
 %% ==================== 评估 ====================
 datasets = struct('pub', struct('X', X_pub, 'sbp', Y_pub_sbp, 'dbp', Y_pub_dbp, 'label', '公开测试集'), ...

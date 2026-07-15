@@ -1,9 +1,14 @@
 """
-evaluate_model.py — 评估 1D-ResNet 模型在测试集上的血压预测性能
+evaluate_model.py — 双数据集评估 1D-ResNet 模型的血压预测性能
+
+评估策略:
+  1. 公开测试集 (1582 样本): 评估源域内性能
+  2. 自建测试集 (273 样本): 评估跨域迁移性能 ← 核心指标
+
+支持 eval_mode: 'base' | 'finetuned' | 'both'
 输出: SBP/DBP 预测值, MAE/STD, Bland-Altman 图, 相关性散点图, 对比柱状图
 
 用法: python evaluate_model.py
-支持 eval_mode: 'base' | 'finetuned' | 'both'
 """
 
 import os
@@ -17,8 +22,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from model import (
-    ResNet1D, load_public_dataset,
-    preprocess_ppg, apply_normalize_3ch
+    ResNet1D, load_public_dataset, load_self_dataset,
+    preprocess_ppg, apply_normalize_3ch,
+    safe_torch_load
 )
 
 # ============================================================
@@ -27,12 +33,20 @@ from model import (
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DATA_PATH = os.path.join(SCRIPT_DIR, '数据集', '1、公开数据集')
+SELF_DATA_PATH   = os.path.join(SCRIPT_DIR, 'dataset')
 MODEL_SAVE_PATH  = os.path.join(SCRIPT_DIR, 'models')
 OUTPUT_PATH      = os.path.join(SCRIPT_DIR, 'cnn_output')
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 
 # 评估模式: 'base' | 'finetuned' | 'both'
 EVAL_MODE = 'both'
+
+# 信号参数
+FS      = 125
+SIG_LEN = 2048
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'使用设备: {DEVICE}, 评估模式: {EVAL_MODE}')
 
 def compute_metrics(y_true, y_pred, name=''):
     """计算 SBP/DBP 的 MAE 和 STD"""
@@ -59,9 +73,8 @@ def predict(model, X):
             preds.append(model(x_batch.to(DEVICE)).cpu().numpy())
     return np.vstack(preds)
 
-def plot_evaluation(y_true, y_pred, name, output_path):
+def plot_evaluation(y_true, y_pred, ds_label, name, output_path):
     """为 SBP/DBP 生成 Bland-Altman 图和相关性散点图"""
-    ds_label = 'Public' if 'public' in name else 'Self-built'
     bp_names = ['SBP', 'DBP']
 
     # --- Bland-Altman ---
@@ -134,14 +147,8 @@ def plot_evaluation(y_true, y_pred, name, output_path):
     plt.close(fig)
 
 
-FS      = 125
-SIG_LEN = 2048
-
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'使用设备: {DEVICE}, 评估模式: {EVAL_MODE}')
-
 # ============================================================
-# 加载归一化参数
+# 加载归一化参数 (由 train_base_model.py 在公开训练集上计算)
 # ============================================================
 norm_data = np.load(os.path.join(MODEL_SAVE_PATH, 'norm_params.npz'))
 ch_mean = norm_data['ch_mean']
@@ -161,7 +168,7 @@ if EVAL_MODE in ('base', 'both'):
         path = os.path.join(MODEL_SAVE_PATH, 'base_model_final.pth')
     if os.path.exists(path):
         m = ResNet1D(in_channels=3, num_outputs=2).to(DEVICE)
-        m.load_state_dict(torch.load(path, map_location=DEVICE, weights_only=True))
+        m.load_state_dict(safe_torch_load(path, map_location=DEVICE, weights_only=True))
         m.eval()
         models['base'] = m
         print('基础模型已加载')
@@ -174,7 +181,7 @@ if EVAL_MODE in ('finetuned', 'both'):
         path = os.path.join(MODEL_SAVE_PATH, 'finetuned_model_final.pth')
     if os.path.exists(path):
         m = ResNet1D(in_channels=3, num_outputs=2).to(DEVICE)
-        m.load_state_dict(torch.load(path, map_location=DEVICE, weights_only=True))
+        m.load_state_dict(safe_torch_load(path, map_location=DEVICE, weights_only=True))
         m.eval()
         models['finetuned'] = m
         print('微调模型已加载')
@@ -182,24 +189,33 @@ if EVAL_MODE in ('finetuned', 'both'):
         print('微调模型未找到，跳过')
 
 if not models:
-    print('错误: 没有找到任何模型文件，请先运行 train_base_model.py')
+    print('错误: 没有找到任何模型文件，请先运行 train_base_model.py 和 fine_tune_model.py')
     sys.exit(1)
 
 # ============================================================
-# 加载测试数据
+# 加载双数据集测试数据
 # ============================================================
-print('=== 加载测试数据 ===')
+print('\n=== 加载测试数据 ===')
 
+# --- 公开测试集 (源域内评估) ---
 data_pub = load_public_dataset(PUBLIC_DATA_PATH)
-X_pub_raw  = data_pub['test']['ppg']
-Y_pub_sbp  = data_pub['test']['sbp']
-Y_pub_dbp  = data_pub['test']['dbp']
+X_pub_test_raw = data_pub['test']['ppg']
+Y_pub_test_sbp = data_pub['test']['sbp']
+Y_pub_test_dbp = data_pub['test']['dbp']
+X_pub_test_3ch = preprocess_ppg(X_pub_test_raw, FS)
+X_pub_test_3ch = apply_normalize_3ch(X_pub_test_3ch, norm_stats)
+y_pub_test_true = np.column_stack([Y_pub_test_sbp, Y_pub_test_dbp])
+print(f'公开测试集: {len(X_pub_test_3ch)} 样本')
 
-# 预处理
-X_pub_3ch  = preprocess_ppg(X_pub_raw, FS)
-X_pub_3ch  = apply_normalize_3ch(X_pub_3ch, norm_stats)
-
-print(f'测试集样本数: {len(X_pub_3ch)}')
+# --- 自建测试集 (跨域评估 —— 核心指标) ---
+data_self = load_self_dataset(SELF_DATA_PATH, SIG_LEN)
+X_self_test_raw = data_self['test']['ppg']
+Y_self_test_sbp = data_self['test']['sbp']
+Y_self_test_dbp = data_self['test']['dbp']
+X_self_test_3ch = preprocess_ppg(X_self_test_raw, FS)
+X_self_test_3ch = apply_normalize_3ch(X_self_test_3ch, norm_stats)
+y_self_test_true = np.column_stack([Y_self_test_sbp, Y_self_test_dbp])
+print(f'自建测试集: {len(X_self_test_3ch)} 样本')
 
 # ============================================================
 # 评估
@@ -208,66 +224,88 @@ print(f'测试集样本数: {len(X_pub_3ch)}')
 all_results = {}
 
 for model_name, model in models.items():
-    print(f'\n========== 评估: {model_name} 模型 ==========')
+    print(f'\n{"="*60}')
+    print(f'评估: {model_name} 模型')
+    print(f'{"="*60}')
 
-    y_pred = predict(model, X_pub_3ch)
-    y_pred = y_pred * bp_std + bp_mean
-    y_true = np.column_stack([Y_pub_sbp, Y_pub_dbp])
+    # --- 公开测试集 (源域内) ---
+    print(f'\n--- 公开测试集 (源域内评估) ---')
+    y_pub_pred = predict(model, X_pub_test_3ch)
+    y_pub_pred = y_pub_pred * bp_std + bp_mean
+    pub_res, _, _ = compute_metrics(y_pub_test_true, y_pub_pred, '公开测试集')
+    plot_evaluation(y_pub_test_true, y_pub_pred, 'Public Test',
+                    f'{model_name}_public', OUTPUT_PATH)
 
-    pub_res, _, _ = compute_metrics(y_true, y_pred, '测试集')
+    # --- 自建测试集 (跨域) ---
+    print(f'\n--- 自建测试集 (跨域迁移评估) ---')
+    y_self_pred = predict(model, X_self_test_3ch)
+    y_self_pred = y_self_pred * bp_std + bp_mean
+    self_res, _, _ = compute_metrics(y_self_test_true, y_self_pred, '自建测试集')
+    plot_evaluation(y_self_test_true, y_self_pred, 'Self-built Test',
+                    f'{model_name}_self', OUTPUT_PATH)
 
     all_results[model_name] = {
-        'res': pub_res, 'y_true': y_true, 'y_pred': y_pred,
+        'pub_res': pub_res, 'self_res': self_res,
+        'y_pub_true': y_pub_test_true, 'y_pub_pred': y_pub_pred,
+        'y_self_true': y_self_test_true, 'y_self_pred': y_self_pred,
     }
 
-    plot_evaluation(y_true, y_pred, f'{model_name}_test', OUTPUT_PATH)
-
+    # 保存预测结果
     np.savez(os.path.join(OUTPUT_PATH, f'predictions_{model_name}.npz'),
-             y_true=y_true, y_pred=y_pred, res=pub_res)
+             y_pub_true=y_pub_test_true, y_pub_pred=y_pub_pred,
+             y_self_true=y_self_test_true, y_self_pred=y_self_pred,
+             pub_res=pub_res, self_res=self_res)
 
 # ============================================================
-# 对比汇总 (仅在有两个模型时)
+# 对比汇总
 # ============================================================
 if len(models) == 2:
-    print('\n========== 模型对比 ==========')
+    print(f'\n{"="*60}')
+    print(f'模型对比: Base vs Fine-tuned (公开→自建跨域微调)')
+    print(f'{"="*60}')
+
+    # --- 公开测试集对比 ---
+    print(f'\n--- 公开测试集 (源域内) ---')
     print(f'{"模型":<12} {"SBP_MAE":<10} {"SBP_STD":<10} {"DBP_MAE":<10} {"DBP_STD":<10}')
     print('-' * 52)
-
-    model_names = list(models.keys())
-
-    for mn in model_names:
-        r = all_results[mn]['res']
+    for mn in models.keys():
+        r = all_results[mn]['pub_res']
         print(f'{mn:<12} {r["SBP_MAE"]:<10.2f} {r["SBP_STD"]:<10.2f} '
               f'{r["DBP_MAE"]:<10.2f} {r["DBP_STD"]:<10.2f}')
 
-    # 对比柱状图
+    # --- 自建测试集对比 (跨域核心指标) ---
+    print(f'\n--- 自建测试集 (跨域迁移 - 核心指标) ---')
+    print(f'{"模型":<12} {"SBP_MAE":<10} {"SBP_STD":<10} {"DBP_MAE":<10} {"DBP_STD":<10}')
+    print('-' * 52)
+    for mn in models.keys():
+        r = all_results[mn]['self_res']
+        print(f'{mn:<12} {r["SBP_MAE"]:<10.2f} {r["SBP_STD"]:<10.2f} '
+              f'{r["DBP_MAE"]:<10.2f} {r["DBP_STD"]:<10.2f}')
+
+    # --- 绘制双数据集对比柱状图 ---
+    model_names = list(models.keys())
     metrics_keys = ['SBP_MAE', 'SBP_STD', 'DBP_MAE', 'DBP_STD']
     metric_labels = ['SBP MAE', 'SBP STD', 'DBP MAE', 'DBP STD']
-
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
     colors = ['#2196F3', '#FF5722']
 
-    for k, (mk, ml) in enumerate(zip(metrics_keys, metric_labels)):
-        ax = axes[k // 2][k % 2]
-        width = 0.35
-        for mi, mn in enumerate(model_names):
-            r = all_results[mn]['res']
-            ax.bar(mi * width, r[mk], width, label=mn, color=colors[mi])
-        ax.set_xticks([])
-        ax.set_ylabel('mmHg')
-        ax.set_title(ml)
-        ax.legend()
-        ax.grid(axis='y', alpha=0.3)
+    for ds_name, ds_key in [('Public', 'pub_res'), ('Self-built', 'self_res')]:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+        for k, (mk, ml) in enumerate(zip(metrics_keys, metric_labels)):
+            ax = axes[k // 2][k % 2]
+            width = 0.35
+            for mi, mn in enumerate(model_names):
+                r = all_results[mn][ds_key]
+                ax.bar(mi * width, r[mk], width, label=mn, color=colors[mi])
+            ax.set_xticks([])
+            ax.set_ylabel('mmHg')
+            ax.set_title(ml)
+            ax.legend()
+            ax.grid(axis='y', alpha=0.3)
+        fig.suptitle(f'Base vs Fine-tuned — {ds_name} Test Set', fontsize=13)
+        fig.tight_layout()
+        fig.savefig(os.path.join(OUTPUT_PATH, f'model_comparison_{ds_name.lower()}.png'), dpi=150)
+        plt.close(fig)
 
-    fig.suptitle('Base vs Fine-tuned Model Comparison', fontsize=13)
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUTPUT_PATH, 'model_comparison.png'), dpi=150)
-    plt.close(fig)
+    print(f'\n图表已保存至 {OUTPUT_PATH}')
 
-print(f'\n=== 评估完成，结果保存至 {OUTPUT_PATH} ===')
-
-
-# ============================================================
-# 画图函数
-# ============================================================
-
+print(f'\n=== 评估完成 ===')

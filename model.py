@@ -3,6 +3,7 @@ model.py — 1D-ResNet 模型定义 + 数据处理工具
 供 train_base_model.py / fine_tune_model.py / evaluate_model.py 共用
 """
 
+import io
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +11,27 @@ import torch.nn.functional as F
 from scipy.io import loadmat
 import h5py
 import os
+
+
+# ============================================================
+# torch.save / torch.load 非 ASCII 路径兼容包装
+# Windows 下 zipfile 对中文路径做 encode("ascii") 会报错,
+# 通过 BytesIO 绕过文件路径编码问题
+# ============================================================
+
+def safe_torch_save(obj, path):
+    """torch.save 的非 ASCII 路径安全版本"""
+    buffer = io.BytesIO()
+    torch.save(obj, buffer)
+    with open(path, 'wb') as f:
+        f.write(buffer.getvalue())
+
+
+def safe_torch_load(path, map_location=None, weights_only=True):
+    """torch.load 的非 ASCII 路径安全版本"""
+    with open(path, 'rb') as f:
+        buffer = io.BytesIO(f.read())
+    return torch.load(buffer, map_location=map_location, weights_only=weights_only)
 
 
 # ============================================================
