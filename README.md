@@ -1,240 +1,301 @@
 # PPG 无创血压预测项目
 
-基于光电容积脉搏波 (PPG) 信号预测收缩压 (SBP) 和舒张压 (DBP)，包含三套方案：
-- **传统方案**: 手工特征提取 + SVR 回归 (MATLAB)
-- **深度学习方案**: 1D-ResNet 端到端预测 (PyTorch)
-- **GPR 方案**: 手工特征 + 高斯过程回归 (MATLAB)
-- **域适应方案**: 小样本域适应微调 (Feature DA / LwF)
+基于光电容积脉搏波 (PPG) 信号预测收缩压 (SBP) 和舒张压 (DBP)，包含四条技术路线：
+
+| 版本 | 方法 | 语言 | 核心特点 |
+|------|------|:----:|---------|
+| v1.0 | 手工 78 维特征 + ε-SVR | MATLAB | 特征工程基线，奠定特征体系 |
+| v2.0 DL | 1D-ResNet 端到端学习 | Python | 公开全量训练→自建跨域微调（真实跨域） |
+| v2.0 GPR | 高斯过程回归 (7 特征) | MATLAB | 特征级跨域迁移，预测不确定性量化 |
+| v3.0 DA | 小样本域适应（CORAL / LwF） | Python | 目标域仅需 32~64 个标注样本 |
+
+详细技术方案见 [项目总结.md](项目总结.md)。
+
+---
 
 ## 项目结构
 
 ```
 .
-├── model.py                   # [DL] 1D-ResNet 模型定义 + 数据加载 + 预处理
-├── train_base_model.py        # [DL] 基础模型训练 (70% 公开数据)
-├── fine_tune_model.py         # [DL] 微调 (冻结浅层 + 新旧混合 + 可选蒸馏)
-├── evaluate_model.py          # [DL] 评估 (预测值 / MAE / STD / 图表)
-├── split_data.py              # [工具] 公开数据 7:3 拆分
-│
-├── train_gpr.m                # [GPR] 公开特征 → GPR 基础模型训练
-├── finetune_gpr.m             # [GPR] 公开+自建混合 → GPR 微调
-├── evaluate_gpr.m             # [GPR] 双数据集评估 (base vs finetuned)
-│
-├── domain_adaptation_experiments.py  # [DA] 小样本域适应实验 (CORAL/LwF)
+├── model.py                        # [DL] 共享基础设施: ResNet1D + 数据加载 + 预处理
+├── train_base_model.py             # [DL] 基础训练: 公开全量 4745 → base_model.pth
+├── fine_tune_model.py              # [DL] 跨域微调: 公开 4745 + 自建 253 (冻结+混合批+蒸馏)
+├── evaluate_model.py               # [DL] 双数据集评估: 公开 + 自建
+├── split_data.py                   # [已弃用] 公开数据 7:3 拆分 (仅复现 v1.x 时使用)
+
+├── train_gpr.m                     # [GPR] 基础训练: 公开 4745×7 → Matérn 5/2 GP
+├── finetune_gpr.m                  # [GPR] 跨域微调: 公开 4745 + 自建 774 = 5519×7 联合训练
+├── evaluate_gpr.m                  # [GPR] 2×2 交叉评估: 双测试集 × 双模型
+
+├── domain_adaptation_experiments.py  # [DA] 小样本域适应实验 (CORAL + LwF)
 ├── plot_domain_adaptation_results.py # [DA] 域适应结果绘图
-├── plot_optimized_results.py         # [DA] 优化版结果绘图 (含校准)
-├── make_best_scatter.py              # [DA] 最优结果精修散点图
-├── build_word_report.py              # [DA] 实验报告生成 (Word)
-├── build_optimized_word_report.py    # [DA] 优化版报告生成
-│
-├── find_all_parameter.m       # [主程序] 批量特征提取脚本
-├── find_parameter_amend.m     # [核心函数] 单条 PPG 信号的 78 维特征计算
-├── fparameter_n78.m           # [备选函数] 78 维特征的另一种实现
-├── train_DBP.m / train_SBP.m  # SVR 血压预测模型训练
-├── find_result.m              # SVR 训练结果汇总分析
-│
-├── fselect_x.m                # 预处理: 去除波形异常段
-├── fdenoise_x.m               # 预处理: 基线漂移 + 高频噪声去除
-├── fmoveaverage_x.m           # 预处理: 移动平均滤波
-├── fabnormal_x.m              # 预处理: 异常样本剔除
-│
-├── SVMcgForRegress.m          # SVM 参数网格搜索
-├── bin.m / GetPath.py         # 工具: 格式转换 / 批量创建目录
-│
-├── emd.m / eemd.m             # 经验模态分解 / 集合经验模态分解
-├── hhspectrum.m / toimage.m   # Hilbert-Huang 谱计算与可视化
-├── extrema.m / tftb.m         # 极值点查找 / 时频分析窗函数
-│
-├── ParameterVerge.xlsx        # 78 个特征名称表
-├── base.mat / lowpass.mat     # 去噪滤波器系数
-├── parameter.mat              # 特征参考数据
-│
-├── dataset/                   # 自建数据集 (PPG cell + BP 标签)
-│   ├── PPG/
-│   ├── BP/
-│   └── Parameter/
-│
+├── plot_optimized_results.py          # [DA] 优化版结果绘图 (含校准)
+├── make_best_scatter.py               # [DA] 最优结果精修散点图
+├── build_word_report.py               # [DA] 实验报告生成 (Word)
+├── build_optimized_word_report.py     # [DA] 优化版报告生成
+
+├── find_all_parameter.m          # [v1.0] 批量特征提取脚本
+├── find_parameter_amend.m        # [v1.0] 单条 PPG 的 78 维特征计算 (861 行)
+├── fparameter_n78.m              # [v1.0] 78 维特征备选实现
+├── train_SBP.m / train_DBP.m     # [v1.0] SVR 血压预测训练
+├── find_result.m                 # [v1.0] SVR 结果汇总
+
+├── fselect_x.m / fdenoise_x.m    # 预处理: 异常尖峰去除 / 基线漂移+噪声
+├── fmoveaverage_x.m             # 预处理: 移动平均滤波
+├── fabnormal_x.m                 # 预处理: 异常样本剔除
+├── SVMcgForRegress.m             # SVR 超参数网格搜索
+
+├── emd.m / eemd.m                # 经验模态分解 / 集合经验模态分解
+├── hhspectrum.m / toimage.m      # Hilbert-Huang 谱
+├── extrema.m / tftb.m            # 极值点查找 / 时频分析窗函数
+
+├── ParameterVerge.xlsx           # 78 特征名称表
+├── base.mat / lowpass.mat        # 去噪滤波器系数
+
+├── dataset/                      # 自建数据集 (v7.3 cell 原始 PPG)
+│   ├── PPG/                      #   TrainPPG_cell.mat (253), TestPPG_cell.mat (152)
+│   ├── BP/                       #   Train/Test SBP/DBP 标签
+│   └── Parameter/                #   预提取 78 维特征 (Train 774, Test 273)
+
 ├── 数据集/
-│   ├── 1、公开数据集/         # 公开 PPG + 预提取特征 + BP 标签
-│   └── 2、自建数据集/         # 预提取特征 + BP 标签 (无 PPG)
-│
-├── models/                    # 1D-ResNet 模型 (.pth) + 归一化参数 + 拆分索引
-├── cnn_output/                # 1D-ResNet 评估图表 + 预测值
-├── gpr_models/                # GPR 模型 (.mat)
-├── gpr_output/                # GPR 评估图表 + 预测值
-├── cnn_output/
-│   └── domain_adaptation/     # 域适应实验结果 + 图表
-├── reports/                   # 实验报告 (.docx + figures/)
-├── result/                    # SVR 模型训练结果 (MATLAB)
-└── output/                    # 特征提取结果 (MATLAB)
+│   ├── 1、公开数据集/            # 公开 PPG + 78 维特征 + BP (Train 4745, Val 1577, Test 1582)
+│   └── 2、自建数据集/            # 预提取 78 维特征 + BP (Train 774, Test 273)
+
+├── models/                       # 1D-ResNet 模型 (.pth) + 归一化参数
+├── cnn_output/                   # DL 评估图表 + 预测值
+│   └── domain_adaptation/        # 域适应实验结果
+├── gpr_models/                   # GPR 模型 (.mat)
+├── gpr_output/                   # GPR 评估图表 + 预测值
+├── reports/                      # 实验报告 (.docx)
+├── result/                       # SVR 训练结果
+└── output/                       # 特征提取结果
 ```
 
-## GPR 高斯过程回归方案 (MATLAB)
+---
+
+## 深度学习方案 (v2.0 DL, Python)
 
 ### 数据流
 
 ```
-数据集/1、公开数据集/
-├── TrainParameter (4745, 78) → GPR 基础训练 (train_gpr.m)
-├── TestParameter  (1582, 78) → 公开测试评估
-数据集/2、自建数据集/
-├── TrainParameter (774, 78)  ─┐
-└── TestParameter  (273, 78)   │ 微调评估
-                                │
-公开 TrainParameter ────────────┼→ 混合 → GPR 微调 (finetune_gpr.m)
+公开数据集 TrainPPG (4745×2048) ──→ train_base_model.py ──→ base_model.pth
+                                                              ↓
+公开 TrainPPG (4745) 源域 + 自建 PPG (253) 目标域 ──→ fine_tune_model.py ──→ finetuned_model.pth
+                                                              ↓
+公开 TestPPG (1582) + 自建 TestPPG (152) ──→ evaluate_model.py ──→ 双数据集评估报告
 ```
 
-### 1. 基础模型训练 (`train_gpr.m`)
+### 1. 基础训练 (`train_base_model.py`)
 
-直接使用公开数据集的预提取 78 维特征训练 GPR:
+- 使用公开数据集全量 4745 样本训练，**不再**做内部 7:3 拆分
+- 预处理：三通道 (PPG + dPPG + d²PPG) → 独立 z-score 归一化 → BP 联合归一化
+- 1D-ResNet (≈500K 参数)：
 
-1. 加载 `TrainParameter.mat` (4745×78)
-2. z-score 归一化
-3. 训练 GPR: `fitrgp` + Matérn 5/2 核 + exact 拟合
-4. 自评估 MAE/STD
-5. 输出: `gpr_models/gpr_base.mat`
+```
+Input (B, 3, 2048)
+  → Conv1d(3→64, k=7, s=2, pad=3) → BN → ReLU → MaxPool(k=3, s=2)
+  → Layer1: 2×BasicBlock(64→64,  s=1)
+  → Layer2: 2×BasicBlock(64→128, s=2)  (1×1 proj)
+  → Layer3: 2×BasicBlock(128→256, s=2) (1×1 proj)
+  → AdaptiveAvgPool1d(1) → FC(256→2) → [SBP, DBP]
+```
 
-### 2. 微调 (`finetune_gpr.m`)
+- 超参数：Adam(lr=1e-3), 80 epochs, StepLR(step=25, γ=0.5), weight_decay=1e-4, grad_clip=5.0
 
-混合公开和自建特征重新训练 GPR:
+### 2. 跨域微调 (`fine_tune_model.py`)
 
-- 公开旧数据: TrainParameter (4745×78) → 提取特征
-- 自建新数据: TrainParameter (774×78) → 直接加载
-- 合并标准化 → `fitrgp` (Matérn 5/2, sd 子集近似)
-- 输出: `gpr_models/gpr_finetuned.mat`
+三种机制组合：
 
-### 3. 评估 (`evaluate_gpr.m`)
-
-在公开 + 自建两个测试集上分别评估 base 和 finetuned 模型:
-
-- 输出 MAE / STD
-- 生成图表: Bland-Altman / 相关性散点图 / 预测折线图 (含 GPR 95% CI)
-- 对比柱状图 (双数据集, base vs finetuned)
-
-## gpr_output/ 图表注释
-
-图表命名: `{类型}_{模型}_{数据集}.png`
-
-| 类型 | 说明 |
+| 机制 | 说明 |
 |------|------|
-| `BA_*.png` | Bland-Altman: x=均值, y=差值, 红线=偏差±1.96SD |
-| `Corr_*.png` | 相关性散点图: 含 y=x 对角 + 拟合线 + Pearson r |
-| `Line_*.png` | 预测折线图: 前 80 样本, 含 GPR 95% 置信区间 |
-| `model_comparison.png` | 双数据集 bar chart: base vs finetuned 的 4 指标 |
+| **参数冻结** | `requires_grad=False` for conv1/bn1/layer1/layer2 |
+| **混合批采样** | 每批 16 源域 + 16 目标域 (1:1) |
+| **知识蒸馏** | 教师模型冻结, T=3.0, α=0.4 (可通过 `USE_DISTILL` 开关消融) |
 
-| 模型 | 数据集 |
-|------|--------|
-| `base` / `finetuned` | `pub` (公开测试集) / `self` (自建测试集) |
+### 3. 评估 (`evaluate_model.py`)
+
+- 双数据集评估：公开测试集 (源域内) + 自建测试集 (跨域核心指标)
+- 输出：MAE/STD + Bland-Altman / Correlation / Line 三类图表
+- 双模型对比柱状图 (base vs finetuned)
 
 ---
 
-## 域适应方案 (PyTorch)
+## GPR 方案 (v2.0 GPR, MATLAB)
+
+### 特征选择
+
+从 v1.0 的 78 维特征中选取 7 维最优子集（沿用 v1.0 SVR 的 `dataSortList`）：
+
+| 编号 | 名称 | 域 | 生理含义 |
+|:---:|------|:---:|---------|
+| 7 | width1 | 时域 | 2/3 峰值脉宽 |
+| 23 | SV | 时域 | 每搏输出量估算 |
+| 26 | f2 | 频域 | FFT 二次谐波 |
+| 32 | fs4 | 频域 | 能量比指标 |
+| 42 | Z | 时域 | 每搏输出量指数 |
+| 43 | SR_DA | 面积 | 舒张面积占比 |
+| 44 | SR_SA | 面积 | 收缩面积占比 |
+
+### 数据流
+
+```
+公开 TrainParameter (4745×78) → 选取 7 维 (4745×7) → z-score → fitrgp(exact) → gpr_base.mat
+                                                                               ↓
+公开 4745×7 + 自建 774×7 = 5519×7 → 联合 z-score → fitrgp(sd) → gpr_finetuned.mat
+                                                                               ↓
+公开 TestParameter (1582×78→7) + 自建 TestParameter (273×78→7) → evaluate_gpr.m → 2×2 评估
+```
+
+### 核函数
+
+Matérn 5/2（二阶均方可微，适合生理信号的中等平滑性先验）。78→7 特征降维使 GP 训练从分钟级降至秒级。
+
+### 输出
+
+- 预测值 + **预测标准差**（95% 置信区间）
+- Line 图叠加 CI 阴影带（GPR 独有特性）
+- 2 测试集 × 2 模型 × 3 类图 + model_comparison 汇总
+
+---
+
+## 域适应方案 (v3.0 DA, Python)
 
 ### 数据流
 
 ```
 公开 PPG (4745, 源域) ──→ Base 1D-ResNet ──→ 跨域基线
-自建 PPG (253, 目标域) ──→ Few-shot 采样 ──→ Feature DA / LwF 微调
-自建 Test (152) ──→ 评估 MAE/STD
+自建 PPG (253, 目标域) ──→ Few-shot (16/32/64) ──→ Feature DA / LwF ──→ 评估
 ```
 
-### 1. 实验运行 (`domain_adaptation_experiments.py`)
+### 方法
 
-对比两种小样本域适应策略:
-
-| 方法 | 说明 | 损失函数 |
+| 方法 | 原理 | 损失函数 |
 |------|------|---------|
-| **Base** | 不做适配, 直接跨域预测 | — |
-| **Feature DA** | CORAL 对齐 GAP 特征分布 | MSE + λ × CORAL(feat_src, feat_tgt) |
-| **LwF** | teacher 输出保持约束 | MSE + λ × MSE(student_src, teacher_src) |
+| **Base** | 无适应 | — |
+| **Feature DA** | CORAL 对齐 (均值+协方差) | MSE + λ·CORAL(F_s, F_t) |
+| **LwF** | 教师模型软标签约束 | MSE + λ·MSE(student, teacher) |
 
-训练时自动生成散点图、损失曲线、指标柱状图。
+### 运行
 
-### 2. 结果可视化
-
-| 脚本 | 输出 |
-|------|------|
-| `plot_domain_adaptation_results.py` | 柱状图 + MAE 趋势 + 三方法散点对比 |
-| `plot_optimized_results.py` | 优化版 (含校准) 图表 |
-| `make_best_scatter.py` | 最优结果精修散点图 |
-| `build_word_report.py` | 实验报告 (.docx) |
+```bash
+python domain_adaptation_experiments.py --shots 64
+python domain_adaptation_experiments.py --shots 64 --calibrate
+python plot_domain_adaptation_results.py
+python make_best_scatter.py
+```
 
 ---
 
-## 深度学习方案 (PyTorch)
+## 关键实验数据
 
-### 数据流
+### 1D-ResNet 跨域微调 (公开→自建, 蒸馏)
 
-```
-数据集/1、公开数据集/
-├── TrainPPG (4745, 2048) ─┬─ 70% → 基础训练 (train_base_model.py)
-│                          └─ 30% → 微调 (fine_tune_model.py)
-├── ValPPG   (1577, 2048) → 验证 (基础训练)
-└── TestPPG  (1582, 2048) → 最终评估 (evaluate_model.py)
-```
+| 模型 | 测试集 | SBP MAE | SBP STD | DBP MAE | DBP STD |
+|------|--------|:---:|:---:|:---:|:---:|
+| base | 公开 (1582) | 2.42 | 3.61 | 1.30 | 2.03 |
+| base | 自建 (152) | 12.87 | 11.61 | 3.85 | 4.13 |
+| finetuned | 自建 (152) | **6.92** | 7.81 | **2.27** | 2.53 |
 
-### 1. 基础模型训练 (`train_base_model.py`)
+### GPR 跨域迁移 (78→7 特征)
 
-1. 加载公开训练集, 按 7:3 拆分
-2. 预处理: 一阶/二阶导数 → 3 通道 (PPG + dPPG + d²PPG)
-3. z-score 归一化
-4. 1D-ResNet 架构:
+| 模型 | 测试集 | SBP MAE | SBP STD | DBP MAE | DBP STD |
+|------|--------|:---:|:---:|:---:|:---:|
+| base | 公开 (1582) | 3.19 | 5.11 | 1.68 | 2.86 |
+| base | 自建 (273) | 9.17 | 10.93 | 17.82 | 8.12 |
+| finetuned | 自建 (273) | **3.89** | 6.05 | **2.21** | 3.45 |
 
-```
-Input (3, 2048)
-  → Conv1 (7×1, 64, stride 2) → BN → ReLU → MaxPool (3, stride 2)
-  → ResBlock1 [3×1, 64] ×2
-  → ResBlock2 [3×1, 128] ×2, stride 2, 1×1 proj
-  → ResBlock3 [3×1, 256] ×2, stride 2, 1×1 proj
-  → GlobalAvgPool → FC (2) → SBP, DBP
-```
+### 小样本域适应 (64-shot)
 
-5. 训练: Adam (lr=1e-3, step decay), MSE, 梯度裁剪
-6. 输出: `models/base_model_best.pth`
+| 方法 | SBP MAE | SBP STD | DBP MAE | DBP STD |
+|------|:---:|:---:|:---:|:---:|
+| Base (无适应) | 11.36 | 12.07 | 7.18 | 4.48 |
+| **Feature DA 64-shot** 🏆 | **6.21** | 7.31 | **2.30** | 2.62 |
+| LwF 64-shot | 8.02 | 9.07 | 3.31 | 3.07 |
 
-### 2. 微调 (`fine_tune_model.py`)
+---
 
-| 配置项 | 说明 |
+## 图表命名规范
+
+### DL (`cnn_output/`)
+
+| 文件名 | 内容 |
 |--------|------|
-| `USE_DISTILL` | 消融开关: True=蒸馏, False=仅冻结+混合 |
-| `FROZEN_MODULES` | 冻结 conv1+bn1+layer1+layer2 |
-| `FT_DATA_RATIO` | 每批中新数据占比 (0.5) |
+| `BA_{model}_{dataset}.png` | Bland-Altman: x=均值, y=差值, 偏倚±1.96SD |
+| `Corr_{model}_{dataset}.png` | 相关性: y=x 对角 + 拟合线 + Pearson r |
+| `Line_{model}_{dataset}.png` | 前 80 样本折线对比 (蓝=真, 红=预测) |
+| `model_comparison_{public,self-built}.png` | 双数据集 base vs finetuned 柱状图 |
+| `predictions_{model}.npz` | 预测值 + 评估指标 |
 
-### 3. 评估 (`evaluate_model.py`)
+模型: `base`, `finetuned` | 数据集: `public` (公开), `self` (自建)
 
-在公开测试集上评估 base / finetuned 模型, 生成 BA + Corr + Line 图表。
+### GPR (`gpr_output/`)
 
-## cnn_output/ 图表注释
+| 文件名 | 内容 |
+|--------|------|
+| `{BA,Corr,Line}_{model}_{dataset}.png` | 同上, Line 图含 95% CI 阴影带 |
+| `model_comparison.png` | 双数据集 bar chart |
 
-| 文件 | 说明 |
-|------|------|
-| `base_training_curve.png` | 基础模型训练 Loss 曲线 |
-| `finetune_curve.png` | 微调 Loss 曲线 |
-| `BA_{model}_test.png` | Bland-Altman 一致性分析 |
-| `Corr_{model}_test.png` | 相关性散点图 |
-| `Line_{model}_test.png` | 预测值折线图 |
-| `model_comparison.png` | Base vs Fine-tuned 对比柱状图 |
-| `predictions_{model}.npz` | 预测值数据 |
+模型: `base`, `finetuned` | 数据集: `pub` (公开), `self` (自建)
+
+### DA (`cnn_output/domain_adaptation/`)
+
+| 文件名 | 内容 |
+|--------|------|
+| `scatter_all_{N}shot.png` | 三方法散点矩阵 |
+| `loss_curves_{N}shot.png` | Feature DA + LwF 损失曲线 |
+| `metrics_bars_{N}shot.png` | 三方法指标对比 |
+| `fewshot_{N}_results.json` | 评估指标 JSON |
 
 ---
 
-## 传统方案 (MATLAB SVR)
+## 运行方法
 
-### 特征提取
-`find_all_parameter.m` 读取 PPG, 调用 `find_parameter_amend()` 计算 78 维特征。
+### DL (Python)
 
-**78 维特征分类:**
+```bash
+python train_base_model.py                           # 1. 基础训练
+python fine_tune_model.py                            # 2. 微调 (可设 USE_DISTILL=True/False)
+python evaluate_model.py                             # 3. 双数据集评估
+```
 
-| 类别 | 特征编号 | 数量 | 说明 |
-|------|---------|------|------|
-| 时间域 | 1-8, 12-13, 23-24, 36-42, 45-46 | 22 | 收缩/舒张时间、脉宽、周期、波峰幅值 |
-| 面积 | 9-11, 43-44 | 5 | 升支/降支面积及其比值 |
-| 一阶微分 | 14-22 | 9 | 变化速率相关特征 |
-| 频域 | 25-35, 64-78 | 26 | 基频/谐波、频带能量及能量比 |
-| 小波变换 | 47-63 | 17 | 细节系数能量、IMF 能量矩、HHT 边际谱 |
+### GPR (MATLAB)
 
-### SVR 训练
-`train_SBP.m` / `train_DBP.m`: 特征选择 → 归一化 → ε-SVR → MAE/STD → Bland-Altman + 相关性图。
+```matlab
+train_gpr                                            % 1. 基础训练 (公开 7 特征)
+finetune_gpr                                         % 2. 跨域微调 (公开+自建 7 特征)
+evaluate_gpr                                         % 3. 2×2 交叉评估
+```
+
+### DA (Python)
+
+```bash
+python domain_adaptation_experiments.py --shots 32   # 32-shot 实验
+python domain_adaptation_experiments.py --shots 64   # 64-shot 实验
+python plot_domain_adaptation_results.py             # 结果可视化
+```
+
+### SVR (MATLAB)
+
+```matlab
+find_all_parameter                                   % 特征提取
+train_SBP / train_DBP                                % SVR 训练
+find_result                                          % 结果汇总
+```
+
+---
+
+## 依赖
+
+| 方案 | 环境 | 关键依赖 |
+|------|------|---------|
+| DL (Python) | Python 3.9+ | PyTorch 2.x, numpy, scipy, h5py, matplotlib |
+| GPR (MATLAB) | R2019b+ | Statistics and Machine Learning Toolbox (`fitrgp`) |
+| DA (Python) | Python 3.9+ | PyTorch 2.x, numpy, scipy, h5py, matplotlib |
+| SVR (MATLAB) | R2019b+ | LIBSVM, Signal Processing Toolbox, Wavelet Toolbox |
+
+```bash
+pip install torch numpy scipy h5py matplotlib
+```
 
 ---
 
@@ -242,59 +303,13 @@ Input (3, 2048)
 
 | 分支 | 说明 |
 |------|------|
-| `v1.0` | 初始版本: MATLAB SVR + DL, 自建数据微调 |
-| `v1.1` | 数据策略改为公开数据集 7:3 内部分割 |
-| `v1.2` | 消融实验: 新增 `USE_DISTILL` 开关 |
-| `v2.0` | GPR 方案: 公开特征 + 自建特征, 双数据集评估 |
-| `v3.0` | 域适应方案: Feature DA / LwF 小样本迁移 |
+| `v1.0` | MATLAB SVR + 78 维特征提取 |
+| `v1.1` | 公开数据集 7:3 内部拆分 (已弃用) |
+| `v1.2` | 消融实验: `USE_DISTILL` 开关 |
+| `v2.0` | GPR 跨域迁移 + 1D-ResNet 公开→自建微调 |
+| `v3.0` | 域适应: Feature DA / LwF 小样本迁移 |
 | `master` | 开发主线 (当前 = v3.0) |
 
 ---
 
-## 依赖项
-
-### GPR 方案 (MATLAB)
-- **MATLAB** R2019b+
-- **Statistics and Machine Learning Toolbox** — `fitrgp`, `predict`
-
-### 深度学习方案
-- **Python 3.9+**, **PyTorch** 2.x (CUDA 推荐)
-- **numpy, scipy, h5py, matplotlib**
-
-### 传统方案 (MATLAB)
-- **MATLAB** R2019b+
-- **LIBSVM** / **Wavelet Toolbox** / **Signal Processing Toolbox**
-
----
-
-## 使用方法
-
-### GPR 方案（推荐）
-```matlab
-train_gpr         % 1. 基础模型 (公开特征)
-finetune_gpr      % 2. 微调 (公开+自建混合)
-evaluate_gpr      % 3. 评估 (双数据集对比)
-```
-
-### 深度学习方案
-```bash
-python train_base_model.py      # 基础训练
-python fine_tune_model.py       # 微调 (消融/蒸馏)
-python evaluate_model.py        # 评估
-```
-
-### 域适应方案
-```bash
-python domain_adaptation_experiments.py --shots 32
-python domain_adaptation_experiments.py --shots 64 --calibrate
-python plot_domain_adaptation_results.py
-python make_best_scatter.py
-python build_word_report.py
-```
-
-### 传统方案 (MATLAB)
-```matlab
-find_all_parameter              % 特征提取
-train_SBP / train_DBP           % SVR 训练
-find_result                     % 结果汇总
-```
+更多技术细节和实验数据见 [项目总结.md](项目总结.md)。
