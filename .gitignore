@@ -14,7 +14,7 @@ gpr_models/
 .vscode/
 *.swp
 *.swo
-
+.mplconfig/
 # Generated outputs (MATLAB)
 result/
 output/
